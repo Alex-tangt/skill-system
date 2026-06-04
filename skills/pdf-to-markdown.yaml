@@ -1,0 +1,38 @@
+id: "pdf-to-markdown"
+name: "PDF to Markdown"
+version: "1.0.0"
+description: "Extract text content from PDF files and save as same-name Markdown documents. Converts all pages to plain text and writes a .md file alongside the original PDF."
+tags: ["pdf", "markdown", "document", "conversion"]
+timeout_seconds: 120
+max_concurrency: 1
+input_schema:
+  type: object
+  properties:
+    pdf_path:
+      type: string
+      description: "Absolute path to the PDF file to convert"
+  required: ["pdf_path"]
+output_schema:
+  type: object
+  properties:
+    stdout:
+      type: string
+      description: "Extraction summary output"
+
+steps:
+  - id: "extract"
+    name: "Extract PDF to Markdown"
+    description: "Run PyPDF2 extractor to pull text from all PDF pages and write a .md file"
+    tool: "python3 /home/tgt/projects/Skill-System/skills/pdf-to-markdown/scripts/extract_pdf.py --pdf-path {pdf_path}"
+    depends_on: []
+    input_mapping:
+      pdf_path: "$input.pdf_path"
+    success_criteria:
+      type: "always"
+    failure_criteria:
+      type: "exception"
+    retry:
+      max_attempts: 2
+      backoff: "fixed"
+      backoff_base_seconds: 1
+    timeout_seconds: 60

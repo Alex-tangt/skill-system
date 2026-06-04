@@ -1,0 +1,6 @@
+{
+  "name": "skill-engine-project",
+  "description": "Skill Engine — dedicated skill execution platform. Creates, executes, traces, and optimizes AI agent skills. Skills are defined as YAML DAGs and executed via skill_execute MCP tool.",
+  "version": "0.1.0",
+  "author": { "name": "skill-engine" }
+}

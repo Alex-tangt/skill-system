@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "skill-engine": {
+      "command": "python3",
+      "args": ["-m", "skill_engine.server"],
+      "env": {
+        "SKILL_ENGINE_SKILLS_DIR": "./skills",
+        "SKILL_ENGINE_TRACES_DB": "./traces/traces.db"
+      }
+    }
+  }
+}

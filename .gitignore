@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Traces - runtime SQLite databases
+traces/*.db
+traces/*.db-journal
+traces/*.db-wal
+traces/*.db-shm
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+*:Zone.Identifier
+
+# Project-specific
+.claude/settings.local.json
+.mcp.json
+docs/test_file/
+docs/DEVELOPMENT.md.backup
+docs/*.backup

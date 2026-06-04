@@ -1,0 +1,79 @@
+id: "dev-diary"
+name: "Dev Diary Manager"
+version: "1.0.0"
+description: "Manage the project development diary (docs/DEVELOPMENT.md). Add TODO items, mark tasks as done with solutions, list status, and update entries."
+tags: ["dev", "diary", "project-management", "workflow"]
+timeout_seconds: 30
+max_concurrency: 1
+input_schema:
+  type: object
+  properties:
+    operation:
+      type: string
+      description: "Diary operation to perform"
+      enum: ["add", "done", "list", "update"]
+    title:
+      type: string
+      description: "Title of the diary entry"
+    priority:
+      type: string
+      description: "Priority for add operation: high, medium, low"
+      enum: ["high", "medium", "low"]
+    description:
+      type: string
+      description: "Description (for add) or solution notes (for done)"
+    issue_id:
+      type: string
+      description: "Issue ID (e.g., #P-5). Auto-generated if omitted."
+    phase:
+      type: string
+      description: "Phase name for done operation. Defaults to 常规迭代(today)."
+    new_title:
+      type: string
+      description: "New title for update operation"
+    new_priority:
+      type: string
+      description: "New priority for update operation"
+      enum: ["high", "medium", "low"]
+    filter:
+      type: string
+      description: "Filter for list operation: all, pending, completed"
+      enum: ["all", "pending", "completed"]
+  required: ["operation"]
+
+output_schema:
+  type: object
+  properties:
+    returncode:
+      type: integer
+      description: "0 on success, 1 on error"
+    status:
+      type: string
+      description: "ok or error"
+    message:
+      type: string
+      description: "Human-readable result message"
+
+steps:
+  - id: "manage"
+    name: "Manage Development Diary"
+    description: "Execute the requested diary operation (add/done/list/update) via the diary.py helper script"
+    tool: "python3 /home/tgt/projects/Skill-System/skills/dev-diary/scripts/diary.py --file /home/tgt/projects/Skill-System/docs/DEVELOPMENT.md --operation {operation} --title {title} --priority {priority} --description {description} --issue-id {issue_id} --phase {phase} --new-title {new_title} --new-priority {new_priority} --filter {filter}"
+    depends_on: []
+    input_mapping:
+      operation: "$input.operation"
+      title: "$input.title"
+      priority: "$input.priority"
+      description: "$input.description"
+      issue_id: "$input.issue_id"
+      phase: "$input.phase"
+      new_title: "$input.new_title"
+      new_priority: "$input.new_priority"
+      filter: "$input.filter"
+    success_criteria:
+      type: "always"
+    failure_criteria:
+      type: "exception"
+    retry:
+      max_attempts: 1
+    timeout_seconds: 15
