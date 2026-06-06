@@ -5,13 +5,23 @@
     "PostToolUse": [
       {
         "matcher": "*",
-        "command": "python3 /home/tgt/projects/Skill-System/src/skill_engine/hooks/capture.py"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /home/tgt/projects/Skill-System/src/skill_engine/hooks/capture.py"
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [
       {
         "matcher": "*",
-        "command": "python3 /home/tgt/projects/Skill-System/src/skill_engine/hooks/capture.py"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /home/tgt/projects/Skill-System/src/skill_engine/hooks/capture.py"
+          }
+        ]
       }
     ]
   }
