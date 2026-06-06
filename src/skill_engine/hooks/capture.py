@@ -60,12 +60,13 @@ def init_db(db_path: str) -> sqlite3.Connection:
 
 
 def compute_dedup_hash(event: dict) -> str:
-    """SHA256 of session_id + tool_name + tool_input for exact dedup."""
+    """SHA256 of session_id + tool_name + tool_input + tool_output for exact dedup."""
     key = json.dumps(
         {
             "session_id": event.get("session_id", ""),
             "tool_name": event.get("tool_name", ""),
             "tool_input": event.get("tool_input", ""),
+            "tool_output": event.get("tool_output", ""),
         },
         sort_keys=True,
     )
@@ -86,14 +87,17 @@ def capture() -> None:
     hook_event_name = hook_input.get("hook_event_name", "unknown")
     tool_name = hook_input.get("tool_name", "")
     tool_input = hook_input.get("tool_input", {})
+    tool_result = hook_input.get("tool_result", {})
     transcript_path = hook_input.get("transcript_path", "")
 
     tool_input_json = json.dumps(tool_input) if isinstance(tool_input, dict) else str(tool_input)
+    tool_output_json = json.dumps(tool_result) if isinstance(tool_result, (dict, list)) else str(tool_result)
 
     event = {
         "session_id": session_id,
         "tool_name": tool_name,
         "tool_input": tool_input_json,
+        "tool_output": tool_output_json,
     }
     dedup_hash = compute_dedup_hash(event)
 
@@ -104,9 +108,11 @@ def capture() -> None:
         conn = init_db(db_path)
         conn.execute(
             """INSERT OR IGNORE INTO history_events
-               (session_id, hook_event_name, tool_name, tool_input_json, transcript_path, dedup_hash)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (session_id, hook_event_name, tool_name, tool_input_json, transcript_path, dedup_hash),
+               (session_id, hook_event_name, tool_name, tool_input_json, tool_output_json,
+                transcript_path, dedup_hash)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (session_id, hook_event_name, tool_name, tool_input_json, tool_output_json,
+             transcript_path, dedup_hash),
         )
         conn.commit()
         conn.close()

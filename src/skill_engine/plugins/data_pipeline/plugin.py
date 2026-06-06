@@ -124,47 +124,77 @@ class DataPipelinePlugin(BasePlugin):
             sid = event.get("session_id", "unknown")
             sessions.setdefault(sid, []).append(event)
 
-        # Build one ExecutionTrace per session
+        # Init TraceStore
+        from skill_engine.kernel.trace_store import TraceStore
+        ts = TraceStore(self._trace_db_path)
+        await ts.initialize()
+
         conn = sqlite3.connect(self._history_db_path)
         for sid, events in sessions.items():
             try:
-                trace = ExecutionTrace(
-                    id=str(uuid.uuid4()),
-                    skill_id="",  # Will be filled by extractors
-                    skill_version="unknown",
-                    run_id=str(uuid.uuid4()),
-                    status="running",
-                    input={"session_id": sid},
-                    context_type="hook",
-                )
+                # Find existing trace or create new one
+                existing_trace = await self._find_trace_by_session(ts, sid)
+                if existing_trace:
+                    trace_id = existing_trace["id"]
+                    trace = ExecutionTrace(
+                        id=trace_id,
+                        skill_id=existing_trace.get("skill_id", ""),
+                        skill_version=existing_trace.get("skill_version", "unknown"),
+                        run_id=existing_trace["run_id"],
+                        status=existing_trace.get("status", "running"),
+                        input=json.loads(existing_trace.get("input_json", "{}")),
+                        context_type="hook",
+                    )
+                    # Collect existing step hashes for dedup
+                    existing_hashes = {
+                        s.get("context_ref", "") for s in existing_trace.get("steps", [])
+                    }
+                else:
+                    trace = ExecutionTrace(
+                        id=str(uuid.uuid4()),
+                        skill_id="",
+                        skill_version="unknown",
+                        run_id=str(uuid.uuid4()),
+                        status="running",
+                        input={"session_id": sid},
+                        context_type="hook",
+                    )
+                    existing_hashes = set()
 
+                # Extract step traces for new events (skip duplicates)
                 step_traces = []
+                new_events = []
                 for event in events:
+                    if event.get("dedup_hash", "") in existing_hashes:
+                        continue  # Already in trace, skip
                     for extractor in self._extractors:
                         if extractor.can_extract(event):
                             step = extractor.extract(event, trace.id)
                             if step:
+                                step.context_ref = event.get("dedup_hash", "")
                                 step_traces.append(step)
                             break
+                    new_events.append(event)
 
                 if step_traces:
                     trace.step_traces = step_traces
                     trace.status = "succeeded"
-
-                    # Write to TraceStore
-                    await self._write_trace(trace)
-
+                    if existing_trace:
+                        await self._append_steps(ts, trace)
+                    else:
+                        await self._write_trace(ts, trace)
                     status.traces_created += 1
 
                 # Mark as processed
-                event_ids = [e["id"] for e in events]
-                conn.executemany(
-                    "UPDATE history_events SET processed = 2 WHERE id = ?",
-                    [(eid,) for eid in event_ids],
-                )
-                conn.commit()
+                event_ids = [e["id"] for e in new_events]
+                if event_ids:
+                    conn.executemany(
+                        "UPDATE history_events SET processed = 2 WHERE id = ?",
+                        [(eid,) for eid in event_ids],
+                    )
+                    conn.commit()
 
-                status.events_processed += len(events)
+                status.events_processed += len(new_events)
 
             except Exception as e:
                 status.errors.append(f"Session {sid}: {e}")
@@ -173,13 +203,33 @@ class DataPipelinePlugin(BasePlugin):
         self._last_status = status
         return status
 
-    async def _write_trace(self, trace: ExecutionTrace) -> None:
-        """Write a trace to the TraceStore."""
+    async def _find_trace_by_session(self, ts, session_id: str) -> dict | None:
+        """Find an existing ExecutionTrace by session_id in input_json."""
         from skill_engine.kernel.trace_store import TraceStore
+        # Query all traces and filter by session_id in input
+        # For efficiency, we check recent traces (limit 50)
+        traces = await ts.list_traces(limit=50)
+        for t in traces:
+            try:
+                inp = json.loads(t.get("input_json", "{}")) if isinstance(t.get("input_json"), str) else t.get("input_json", {})
+                if inp.get("session_id") == session_id:
+                    # Also fetch full trace with steps
+                    return await ts.get_trace(t["run_id"])
+            except (json.JSONDecodeError, TypeError):
+                continue
+        return None
 
-        ts = TraceStore(self._trace_db_path)
-        await ts.initialize()
+    async def _write_trace(self, ts, trace: ExecutionTrace) -> None:
+        """Write a new trace and its step traces."""
+        trace.started_at = time.time()
         await ts.insert_trace(trace)
+        for step in trace.step_traces:
+            await ts.upsert_step_trace(step)
+        trace.finished_at = time.time()
+        await ts.update_trace(trace)
+
+    async def _append_steps(self, ts, trace: ExecutionTrace) -> None:
+        """Append step traces to an existing trace."""
         for step in trace.step_traces:
             await ts.upsert_step_trace(step)
         trace.finished_at = time.time()
