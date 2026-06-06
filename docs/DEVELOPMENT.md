@@ -37,37 +37,52 @@
 - [x] **Skill 触发链路断裂：skill_execute 未被自然触发** (#P-8) — 诊断：两套系统不互通 → 架构决策：全面专用 → 实现：.claude-plugin/plugin.json + skill_create 自动 SKILL.md + skill_import + optimizer 单例修复。skills/ 下 3 skill 均 SKILL.md+YAML 齐全，188 测试无回归。
 - [x] **skill_import 实现（#P-3）** — skill_import MCP 工具已实现：解析 SKILL.md frontmatter + body → 提取 workflow 步骤 → 扫描 scripts/ → 生成 YAML wrapper → 保存到 skills/imported/。同时 skill_create 自动生成 SKILL.md 骨架。
 
+### v0.2 架构方向讨论（2026-06-06）
+
+- [x] **架构方向重新评估** — 多轮深入问答，确定 v0.1.0 封闭 YAML-DAG 模型不可持续，Skill Engine 应转型为基于 Agent Skills 开放标准的微内核。详见 [architecture-v0.2.md](architecture-v0.2.md)。
+- [x] **核心决策对齐** — 10 项关键决策已拍板：元数据标准(SKILL.md)、定位(微内核)、执行(委托原生机制)、trace 来源(Hook 截取 LLM 上下文)、采集适配(仅 Claude Code + 预留扩展)、插件化(独立 MCP Server)、编排方案(SKILL.md body 引用 + 导出展开) 等。
+- [x] **architecture-v0.2.md 文档化** — 方向文档写入 `docs/architecture-v0.2.md`，包含架构图、数据流水线概念、待解决问题清单。
+
 ---
 
-## 待解决
+## 待解决（v0.2 方向）
 
-### 高优先级（阻断真实使用）
+### 高优先级（重构前必须决策）
 
-- [ ] **skill_analyze 工具绑定（#P-2）** — 分解出的 step 默认 `tool: "echo"`，未根据任务描述推断需要的工具类型。应标注每个 step 需要的工具/脚本并生成占位 command。
-- [ ] **Skill 分层管理（#P-5）** — 当前 skill 扁平存储在 skills/ 单一目录，SkillDefinition 无 parent/category/namespace 字段。需支持目录嵌套、层级命名空间、skill_list 按层级筛选。
-- [ ] **Skill 运行时复用（#P-6）** — Step.tool 只能引用 Python 函数或 Shell 命令，不能调用另一个 Skill。需支持 step 中引用其他 skill ID，运行时嵌套执行，被调用 skill 的输入/输出通过 input_mapping 和 $steps 引用串联。
-- [ ] **Skill 功能去重（#P-7）** — TF-IDF 只做 query→skill 搜索，不比较 skill 间相似度；优化器 _detect_composition_opportunities 为空实现。需支持跨 skill 功能重叠检测、相似度报告、去重建议。
+- [ ] **现有代码去留决策** — DAG executor、YAML skill store、optimizer/analyzer、decomposer 等 v0.1.0 组件：哪些保留、哪些重写、哪些直接废弃？需在重构方案中逐一评估。
+- [ ] **Skill Store 重设计** — 从自定义 YAML 格式（`skills/{id}.yaml`）迁移到 Agent Skills 标准（`skills/{name}/SKILL.md`）。读写逻辑、backup 策略、与现有 3 个 skill 的迁移路径均需重新设计。
+- [ ] **微内核 API/接口设计** — 插件如何注册/发现？事件如何路由？通信协议选型（MCP 工具调用 vs 事件总线 vs gRPC）？
+- [ ] **数据流水线具体形态** — Hook 截取上下文后的完整数据流：实时流式 vs 批量处理？各组件间数据交换格式？去重策略测试方案？
 
-### 中优先级（体验缺口）
+### 中优先级（重构阶段实施）
 
-- [ ] **DAG 条件分支（H-1）** — 纯 DAG 不支持 `if step A fails → route to step B`。v2 加 `condition` 边。
-- [ ] **优化器后台自动应用（H-6，需文件锁保护）** — 当前为被动触发，低风险优化可自动应用但需防竞态。
-- [ ] **TF-IDF 索引缓存（M-2）** — 当前每次查询重新构建矩阵，skill 增长后需内存缓存 + 失效机制。
+- [ ] **数据采集适配器接口** — 为 Claude Code `*` hook 设计适配器，同时预留 Cursor/Copilot/Codex 扩展点。Hook 脚本由 Skill-System 提供。
+- [ ] **Trace 数据结构** — 从 LLM 上下文（messages + CoT）能提取什么字段？与 v0.1.0 的 ExecutionTrace/StepTrace 差异多大？需设计新的 trace schema。
+- [ ] **编排引用语法** — SKILL.md body 中如何引用其他 skill（本地按引用工作），导出时展开替换的具体规则。
+- [ ] **Hook 脚本部署方案** — `*` hook 如何由 Skill Engine 生成/管理？是否需要 Skill Engine 干预用户的 `.claude/settings.json`？
 
-### 低优先级（工程健壮性）
+### 低优先级（后期迭代）
 
-- [ ] **版本管理（M-5）** — 当前只有 .backup 文件。v2 做版本化文件名 + 回滚。
-- [ ] **认证模型（M-8）** — 当前只绑 127.0.0.1。v2 加 token 认证。
-- [ ] **测试覆盖扩展** — 补 skill_analyze/decomposer 单元测试，补 TraceStore 集成测试，补 optimizer 分析正确性测试。
+- [ ] **优化器设计细化** — 输入从自产 trace 变为外部采集的上下文分析结果，审核机制具体形态待定。
+- [ ] **原子 skill 与业务 skill 分层** — 理论方案验证 + 工程实践，目前仅为预想。
+- [ ] **多厂商数据采集适配** — Cursor、Copilot、Codex 等，采集接口扩展性验证。
+- [ ] **版本管理** — 对 SKILL.md 的版本追踪（利用 `metadata.version` 字段 或 git-based）。
+- [ ] **认证模型** — MCP server 对外暴露时的 token 认证。
+- [ ] **测试覆盖扩展** — 随重构更新测试体系，补数据流水线、trace 提取等新模块的测试。
 - [ ] **MCP Inspector 测试流程** — 补充手动调试工具的操作文档。
 
-## 工具清单（16 个 MCP 工具）
+---
+
+## 工具清单
+
+> **注**：当前 16 个 MCP 工具基于 v0.1.0 架构。v0.2 重构后工具集将随微内核 + 插件架构重新设计，具体保留/新增/废弃哪些工具待重构方案敲定。
 
 ```
+v0.1.0 (当前):
 skill_list        skill_get         skill_create       skill_update
 skill_delete      skill_analyze     skill_execute      skill_search
-skill_compose     trace_get         trace_list         trace_errors
-optimizer_analyze optimizer_apply   optimizer_status
+skill_compose     skill_import      trace_get          trace_list
+trace_errors      optimizer_analyze optimizer_apply    optimizer_status
 ```
 
 ---
@@ -78,6 +93,8 @@ optimizer_analyze optimizer_apply   optimizer_status
 |------|------|
 | `.mcp.json` | 项目级 MCP server 定义 |
 | `.claude/settings.json` | MCP 服务器启用配置 |
-| `docs/architecture-plan.md` | 完整架构设计 + 决策记录 |
+| `docs/architecture-plan.md` | v0.1.0 完整架构设计 + 决策记录 |
+| `docs/architecture-v0.1.md` | v0.1.0 架构评审（22 缺陷分析） |
+| `docs/architecture-v0.2.md` | **v0.2 架构方向**（本次讨论结论） |
 | `docs/DEVELOPMENT.md` | 本文件，当前开发状态 |
 | `CLAUDE.md` | Claude Code 会话指引 |
