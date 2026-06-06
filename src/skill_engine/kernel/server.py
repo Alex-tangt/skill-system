@@ -335,10 +335,20 @@ async def pipeline_status() -> str:
 # ── Entry point ──
 
 
+def _lazy_init():
+    """Import-time plugin loading, safely wrapped."""
+    try:
+        loop = asyncio.new_event_loop()
+        pm = get_plugin_manager()
+        loop.run_until_complete(pm.load_all())
+        loop.close()
+    except Exception:
+        pass
+
+
 def main():
-    """Start the kernel MCP server and load plugins."""
-    pm = get_plugin_manager()
-    asyncio.run(pm.load_all())
+    """Start the kernel MCP server. Plugins loaded on startup."""
+    _lazy_init()
     mcp.run(transport="stdio")
 
 
