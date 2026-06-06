@@ -4,83 +4,140 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-Skill Engine is an MCP server that manages AI agent skills — creating, executing, tracing, optimizing, and composing them. Skills are YAML-defined DAGs of sub-steps. Runs as a stdio MCP server consumable by Claude Code, Cursor, or any MCP client.
+Skill-System is a microkernel-based skill management platform for AI agents. Skills follow the **Agent Skills open standard** (SKILL.md) and are executed by the native Claude Code skill mechanism. Skill-System provides:
+
+- **Skill metadata management** — CRUD on SKILL.md files with `.backup` safety
+- **Plugin architecture** — Extensible via BasePlugin interface (internal + external MCP servers)
+- **Data pipeline** — Claude Code hooks capture LLM context → structured traces → optimizer (future)
+- **Trace storage** — SQLite WAL mode with v0.2 schema (LLM context fields)
+
+Runs as a stdio MCP server consumable by Claude Code or any MCP client.
 
 ## Commands
 
 ```bash
-pip install -e ".[dev]"                 # install with dev deps
-python -m pytest tests/ -v              # run all tests
-python -m pytest tests/unit/test_dag_executor.py -v  # single test file
-python -m skill_engine.server           # start MCP server (stdio)
+pip install -e ".[dev]"                          # install with dev deps
+python -m pytest tests/ -v                       # run all tests (61)
+python -m skill_engine.kernel.server             # start kernel MCP server (stdio)
 ```
 
-## Skill 执行规则
+## Architecture (v0.2)
 
-本项目所有 skill 通过 Skill Engine 统一执行：
+### Directory structure
 
-- **发现**: Skill 工具自动发现 `skills/*/SKILL.md`，由 `.claude-plugin/plugin.json` 注册
-- **执行**: **必须使用 `skill_execute` MCP 工具**。禁止直接调用 `skills/*/scripts/*.py`
-- **原因**: skill_execute 自动提供输入校验 + 超时/重试 + SQLite 追踪。绕过即无 trace，优化器不可用
-- **导入外部 skill**: 通过 `skill_import` 纳入管理后，同样走 skill_execute 执行
-
-## Dev Diary Skill
-
-项目开发日记，通过 `skill_execute` 执行 (skill_id=`dev-diary`)：
-
-```bash
-skill_execute dev-diary --input '{"operation": "add", "title": "...", "priority": "high"}'
-skill_execute dev-diary --input '{"operation": "done", "title": "...", "description": "解决方案"}'
-skill_execute dev-diary --input '{"operation": "list", "filter": "all"}'
-skill_execute dev-diary --input '{"operation": "update", "title": "...", "priority": "medium"}'
 ```
-
-日记存储在 `docs/DEVELOPMENT.md`，由 `skills/dev-diary.yaml` (DAG) + `skills/dev-diary/scripts/diary.py` (脚本) 支撑。
-
-## Architecture
+src/skill_engine/
+├── kernel/                    # Microkernel core
+│   ├── server.py              #   MCP server (16 tools)
+│   ├── skill_store.py         #   SKILL.md CRUD + .backup
+│   ├── trace_store.py         #   SQLite WAL trace storage
+│   ├── plugin_manager.py      #   Plugin lifecycle (loads plugins.yaml)
+│   ├── plugin_interface.py    #   BasePlugin ABC (api_version negotiation)
+│   ├── plugin_registry.py     #   PluginHandle registry
+│   ├── retriever.py           #   TF-IDF skill search
+│   ├── validator.py           #   JSON Schema input validation
+│   └── models/
+│       ├── skill_metadata.py  #   SKILL.md frontmatter + body model
+│       └── trace.py           #   ExecutionTrace / StepTrace (v0.2 fields)
+├── plugins/
+│   └── data_pipeline/         # Data Pipeline Plugin (internal)
+│       ├── plugin.py          #   DataPipelinePlugin (implements BasePlugin)
+│       ├── extractors.py      #   BaseExtractor + 3 MVP implementations
+│       ├── dedup.py           #   BaseDedup + SHA256
+│       ├── triggers.py        #   BaseTrigger + Manual
+│       └── models.py          #   HistoryEvent, PipelineStatus
+└── hooks/
+    └── capture.py             # Zero-dependency Claude Code hook script
+plugins.yaml                   # Plugin configuration (declarative)
+```
 
 ### Data flow
 
-Skills are YAML files (`skills/{id}.yaml`) loaded by `SkillStore`. Execution goes through `DAGExecutor`:
+```
+Claude Code Session
+  ├── Native skill mechanism (execution)
+  └── PostToolUse / UserPromptSubmit hooks
+        │
+        ▼
+      capture.py  ──►  History DB (SQLite, traces/history.db)
+        │                    │
+        │                    │  pipeline_run (MCP tool, manual trigger)
+        │                    ▼
+        │              Data Pipeline Plugin
+        │                ├── BaseDedup (SHA256 dedup)
+        │                ├── BaseExtractor chain (3 MVP extractors)
+        │                └── Build ExecutionTrace + StepTrace
+        │                    │
+        │                    ▼
+        │              Trace DB (SQLite, traces/traces.db)
+        │
+        └── Future: Optimizer Plugin reads Trace DB → suggests SKILL.md improvements
+```
+
+### Kernel MCP tools (16)
+
+**Skill CRUD (5):** `skill_list`, `skill_get`, `skill_create`, `skill_update`, `skill_delete`
+**Search (1):** `skill_search`
+**Trace (3):** `trace_get`, `trace_list`, `trace_errors`
+**Plugin mgmt (5):** `plugin_list`, `plugin_health`, `plugin_config`, `pipeline_run`, `pipeline_status`
+
+### Plugin system
+
+Plugins implement `kernel/plugin_interface.py::BasePlugin`:
+- `api_version` — Must match kernel `KERNEL_API_VERSION` ("0.2")
+- `initialize()` / `health_check()` / `shutdown()` — Lifecycle
+- `list_mcp_tools()` / `call_tool()` — MCP tool exposure
+
+Two modes:
+- **Internal** — Imported as Python module, shares kernel process. Crash = kernel crash.
+- **External** — Independent MCP server subprocess, connected via `ClientSession`.
+
+Configured in `plugins.yaml` at project root.
+
+### Extensibility (Open for extension)
+
+Four strategy interfaces with MVP concrete implementations:
+
+| Interface | MVP | Swappable for |
+|-----------|-----|---------------|
+| `BaseExtractor` | Regex (3 extractors) | LLM-based extraction |
+| `BaseDedup` | SHA256 exact match | Semantic/simhash dedup |
+| `BaseTrigger` | Manual (pipeline_run) | Cron / event-driven |
+| `BasePlugin` | Internal module | External MCP server |
+
+### Skill format
+
+Skills follow the **Agent Skills open standard** (agentskills.io):
 
 ```
-skill_execute MCP tool
-  → SkillStore.get(skill_id)
-  → DAGExecutor.execute(skill, input, tracer=Tracer(trace_store))
-    → validator.validate_input  (JSON Schema check at entry)
-    → skill.topological_order   (Kahn's algorithm, detects cycles)
-    → group by level → asyncio.gather with Semaphore(max_concurrency)
-    → per step: resolver.resolve_input → tool call with asyncio.wait_for(timeout) → criteria.evaluate_success
-    → on failure: recursively _skip_downstream
-    → Tracer writes execution_traces + step_traces to SQLite (WAL mode, aiosqlite)
+skills/<name>/
+├── SKILL.md          # YAML frontmatter + Markdown body
+├── scripts/          # Executable code
+├── references/       # Documentation
+└── assets/           # Static resources
 ```
 
-### Reference system (`engine/resolver.py`)
+SKILL.md frontmatter: `name` (required, ≤64 chars), `description` (required, ≤1024 chars), `license`, `compatibility`, `metadata`, `allowed-tools`.
 
-Step `input_mapping` supports exactly two reference forms:
-- `$input.x.y` — access skill input
-- `$steps.<step_id>.output.z` — access upstream step output
+## Dev Diary
 
-Short `$steps.x` without step ID is rejected. Resolver uses `functools.reduce` for dotted-path traversal — no jsonpath dependency.
+Project development diary at `docs/DEVELOPMENT.md`. Managed via diary script:
 
-### Retry semantics
+```bash
+python3 skills/dev-diary/scripts/diary.py \
+  --file docs/DEVELOPMENT.md \
+  --operation add \
+  --title "Task title" \
+  --priority high \
+  --description "Task description"
 
-A step retries only when an **exception** or **timeout** occurs. If the tool runs successfully but output doesn't match `success_criteria`, the retry loop continues — `failure_criteria` is not consulted. Known tool (`Unknown tool: X`) is a hard failure with no retry.
+# Other operations: done, list, update
+```
 
-### Skill composition (`retrieval/retriever.py`)
-
-`compose_skills` creates a temporary (non-persisted) SkillDefinition by concatenating DAGs. Step IDs are prefixed (`_s0_`, `_s1_`) to avoid collisions. Terminal steps of skill N become dependencies of skill N+1's root steps. The result is returned for preview; `skill_create` must be called separately to persist.
-
-### Optimizer (passive mode)
-
-No background scanning. `optimizer_analyze` runs on-demand, queries trace data for 4 patterns (failure hotspots, timeouts, retry gaps, validation gaps), returns ranked `OptimizationRecommendation` objects. `optimizer_apply` patches the skill YAML, bumps minor version, saves `.backup`.
-
-### Tool model
-
-`ToolRegistry` maps step `tool` names to Python callables. The only built-in is `echo`. Real skills register their own tools (HTTP calls, code exec, etc.) here before execution.
-
-### Conventions
+## Conventions
 
 - Every `.py` file needs `from __future__ import annotations` (Python 3.10 compat for `X | None` syntax).
-- MCP tool functions return JSON strings. Async tools must `await trace_store.initialize()` before use.
-- Skill saves automatically create `.backup` of the previous YAML.
+- MCP tool functions return JSON strings.
+- Skill saves automatically create `.backup` of the previous SKILL.md.
+- TraceStore uses `PRAGMA journal_mode=WAL` for concurrent reads.
+- Hook scripts (`capture.py`) must be zero-dependency — stdlib only.

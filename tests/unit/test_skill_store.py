@@ -1,77 +1,94 @@
 from __future__ import annotations
 
 import os
+import tempfile
 import pytest
-from skill_engine.models.skill import SkillDefinition, StepDefinition, Criteria
+from skill_engine.kernel.skill_store import SkillStore
+from skill_engine.kernel.models.skill_metadata import SkillMetadata
 
 
-def test_save_and_get(skill_store):
-    skill = SkillDefinition(id="test", name="Test", steps=[])
-    skill_store.save(skill)
-    loaded = skill_store.get("test")
+@pytest.fixture
+def _ts_dir():
+    with tempfile.TemporaryDirectory() as d:
+        yield d
+
+
+@pytest.fixture
+def ks(_ts_dir):
+    return SkillStore(_ts_dir)
+
+
+# Each test uses the conftest's "temp_skills_dir" for backup path verification,
+# but "ks" for the kernel SkillStore instance.
+
+def test_save_and_get(ks):
+    skill = SkillMetadata(name="test-skill", description="A test skill.")
+    ks.save(skill)
+    loaded = ks.get("test-skill")
     assert loaded is not None
-    assert loaded.name == "Test"
+    assert loaded.name == "test-skill"
+    assert loaded.description == "A test skill."
 
 
-def test_list_all(skill_store):
-    skill_store.save(SkillDefinition(id="a", name="A", steps=[]))
-    skill_store.save(SkillDefinition(id="b", name="B", steps=[]))
-    skills = skill_store.list_all()
+def test_save_with_body(ks):
+    skill = SkillMetadata(name="with-body", description="Has body.", body="# Instructions\n\nDo this.")
+    ks.save(skill)
+    loaded = ks.get("with-body")
+    assert loaded is not None
+    assert "# Instructions" in loaded.body
+
+
+def test_list_all(ks):
+    ks.save(SkillMetadata(name="skill-a", description="First."))
+    ks.save(SkillMetadata(name="skill-b", description="Second."))
+    skills = ks.list_all()
     assert len(skills) == 2
+    assert {s.name for s in skills} == {"skill-a", "skill-b"}
 
 
-def test_delete(skill_store):
-    skill_store.save(SkillDefinition(id="x", name="X", steps=[]))
-    assert skill_store.delete("x") is True
-    assert skill_store.get("x") is None
-    assert skill_store.delete("nonexistent") is False
+def test_delete(ks):
+    ks.save(SkillMetadata(name="to-delete", description="Gone."))
+    assert ks.delete("to-delete") is True
+    assert ks.get("to-delete") is None
+    assert ks.delete("nonexistent") is False
 
 
-def test_backup_on_overwrite(skill_store, temp_skills_dir):
-    skill = SkillDefinition(id="backup-test", name="V1", steps=[])
-    skill_store.save(skill)
-    skill.name = "V2"
-    skill_store.save(skill)
-    assert os.path.exists(os.path.join(temp_skills_dir, "backup-test.yaml.backup"))
-    loaded = skill_store.get("backup-test")
-    assert loaded.name == "V2"
+def test_backup_on_overwrite(ks, _ts_dir):
+    skill = SkillMetadata(name="backup-test", description="V1.")
+    ks.save(skill)
+    skill.description = "V2."
+    ks.save(skill)
+    backup_path = os.path.join(_ts_dir, "backup-test", "SKILL.md.backup")
+    assert os.path.exists(backup_path)
+    loaded = ks.get("backup-test")
+    assert loaded.description == "V2."
 
 
-def test_get_by_name(skill_store):
-    skill_store.save(SkillDefinition(id="abc", name="My Skill", steps=[]))
-    found = skill_store.get_by_name("My Skill")
+def test_get_by_name(ks):
+    ks.save(SkillMetadata(name="my-skill", description="Case-insensitive."))
+    found = ks.get_by_name("MY-SKILL")
     assert found is not None
-    assert found.id == "abc"
-    assert skill_store.get_by_name("Nonexistent") is None
+    assert found.name == "my-skill"
+    assert ks.get_by_name("Nonexistent") is None
 
 
-def test_list_all_empty_dir(skill_store):
-    """list_all returns empty list when no skills are saved."""
-    skills = skill_store.list_all()
-    assert skills == []
+def test_list_all_empty_dir(ks):
+    assert ks.list_all() == []
 
 
-def test_list_all_skips_non_yaml(skill_store, temp_skills_dir):
-    """list_all ignores non-YAML files in the skills directory."""
-    skill_store.save(SkillDefinition(id="valid", name="Valid", steps=[]))
-    # Create a non-yaml file
-    with open(os.path.join(temp_skills_dir, "README.md"), "w") as f:
-        f.write("This is not a skill")
-    skills = skill_store.list_all()
+def test_list_all_skips_non_skill_dirs(ks, _ts_dir):
+    ks.save(SkillMetadata(name="valid", description="Valid."))
+    os.makedirs(os.path.join(_ts_dir, "not-a-skill"))
+    skills = ks.list_all()
     assert len(skills) == 1
-    assert skills[0].id == "valid"
+    assert skills[0].name == "valid"
 
 
-def test_list_all_handles_corrupted_yaml(skill_store, temp_skills_dir):
-    """list_all skips corrupted YAML files instead of crashing."""
-    skill_store.save(SkillDefinition(id="good", name="Good", steps=[]))
-    # Write corrupted YAML
-    with open(os.path.join(temp_skills_dir, "bad.yaml"), "w") as f:
-        f.write(": : : bad: yaml: [\n")
-    # Current behavior: may raise an exception. This test documents the expected behavior.
-    try:
-        skills = skill_store.list_all()
-        # If it doesn't crash, it should at least include the valid skill
-        assert any(s.id == "good" for s in skills)
-    except Exception:
-        pytest.fail("list_all() should handle corrupted YAML gracefully")
+def test_list_all_handles_bad_frontmatter(ks, _ts_dir):
+    ks.save(SkillMetadata(name="good", description="Valid."))
+    bad_dir = os.path.join(_ts_dir, "bad-skill")
+    os.makedirs(bad_dir)
+    with open(os.path.join(bad_dir, "SKILL.md"), "w") as f:
+        f.write("---\n: : : broken: yaml: [\n---\n\nBad body.")
+    skills = ks.list_all()
+    assert any(s.name == "good" for s in skills)

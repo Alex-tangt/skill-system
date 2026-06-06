@@ -1,6 +1,6 @@
 ---
 name: hello-world
-description: A simple demonstration skill that echoes input through a two-step DAG pipeline. Use when testing the Skill Engine execution flow or verifying skill_execute is working correctly.
+description: A simple demonstration skill that echoes input text. Use for testing the Skill System or verifying that skill execution is working correctly.
 license: MIT
 metadata:
   author: skill-engine

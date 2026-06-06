@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from skill_engine.engine.validator import validate_input
+from skill_engine.kernel.validator import validate_input
 
 
 def test_valid_empty_schema():

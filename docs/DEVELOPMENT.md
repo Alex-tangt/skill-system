@@ -43,25 +43,30 @@
 - [x] **核心决策对齐** — 10 项关键决策已拍板：元数据标准(SKILL.md)、定位(微内核)、执行(委托原生机制)、trace 来源(Hook 截取 LLM 上下文)、采集适配(仅 Claude Code + 预留扩展)、插件化(独立 MCP Server)、编排方案(SKILL.md body 引用 + 导出展开) 等。
 - [x] **architecture-v0.2.md 文档化** — 方向文档写入 `docs/architecture-v0.2.md`，包含架构图、数据流水线概念、待解决问题清单。
 
+### v0.2 重构（2026-06-06）
+
+- [x] **现有代码去留决策** — Phase 0 完成：17 个旧模块 → KEEP 5 + REWRITE 5 + DISCARD 6 + MOVE 1。迁移文档见 docs/architecture-v0.2.md。
+- [x] **Skill Store 重设计** — kernel/skill_store.py 完成：从 skills/{id}.yaml → skills/{name}/SKILL.md。基于 SkillMetadata（YAML frontmatter + Markdown body），保留 .backup 模式。
+- [x] **微内核 API/接口设计** — Phase 1 完成：kernel/server.py（16 MCP 工具）+ kernel/plugin_manager.py（插件生命周期）+ kernel/plugin_interface.py（BasePlugin 抽象基类 + api_version 协商）。plugins.yaml 声明式配置。
+- [x] **数据流水线具体形态** — Phase 2 完成：hooks/capture.py（零依赖 hook 脚本 → History DB）+ plugins/data_pipeline/（DataPipelinePlugin + 4 个抽象基类 BaseExtractor/BaseDedup/BaseTrigger + 3 个 MVP 实现）。pipeline_run 手动触发。
+- [x] **Phase 0-4 v0.2 重构完成** (#P-9) — 从 188 测试/20 秒 → 61 测试/0.48 秒。17 个旧模块 → 12 个新模块。建立 kernel/ 微内核（16 MCP 工具）+ plugins/data_pipeline/（4 个抽象基类）+ hooks/capture.py（零依赖 hook 脚本）。旧 engine/models/optimizer/storage/tracing/retrieval/builtin_tools 全部移除。自定义 YAML DAG → Agent Skills SKILL.md 开放标准。
+
 ---
 
-## 待解决（v0.2 方向）
+## 待解决
 
-### 高优先级（重构前必须决策）
+### 高优先级（阻断真实使用）
 
-- [ ] **现有代码去留决策** — DAG executor、YAML skill store、optimizer/analyzer、decomposer 等 v0.1.0 组件：哪些保留、哪些重写、哪些直接废弃？需在重构方案中逐一评估。
-- [ ] **Skill Store 重设计** — 从自定义 YAML 格式（`skills/{id}.yaml`）迁移到 Agent Skills 标准（`skills/{name}/SKILL.md`）。读写逻辑、backup 策略、与现有 3 个 skill 的迁移路径均需重新设计。
-- [ ] **微内核 API/接口设计** — 插件如何注册/发现？事件如何路由？通信协议选型（MCP 工具调用 vs 事件总线 vs gRPC）？
-- [ ] **数据流水线具体形态** — Hook 截取上下文后的完整数据流：实时流式 vs 批量处理？各组件间数据交换格式？去重策略测试方案？
+- [ ] **真实场景数据测试** (#P-10) — 重启 Claude Code 后验证完整数据流：Hook 采集 → History DB → pipeline_run → Trace DB → trace_get。重点测试：去重效果、提取器准确率、大量事件下的性能。当前所有组件单测通过，但缺少端到端真实数据验证。
 
-### 中优先级（重构阶段实施）
+### 中优先级（体验缺口）
 
 - [ ] **数据采集适配器接口** — 为 Claude Code `*` hook 设计适配器，同时预留 Cursor/Copilot/Codex 扩展点。Hook 脚本由 Skill-System 提供。
 - [ ] **Trace 数据结构** — 从 LLM 上下文（messages + CoT）能提取什么字段？与 v0.1.0 的 ExecutionTrace/StepTrace 差异多大？需设计新的 trace schema。
 - [ ] **编排引用语法** — SKILL.md body 中如何引用其他 skill（本地按引用工作），导出时展开替换的具体规则。
 - [ ] **Hook 脚本部署方案** — `*` hook 如何由 Skill Engine 生成/管理？是否需要 Skill Engine 干预用户的 `.claude/settings.json`？
 
-### 低优先级（后期迭代）
+### 低优先级（工程健壮性）
 
 - [ ] **优化器设计细化** — 输入从自产 trace 变为外部采集的上下文分析结果，审核机制具体形态待定。
 - [ ] **原子 skill 与业务 skill 分层** — 理论方案验证 + 工程实践，目前仅为预想。
@@ -71,18 +76,23 @@
 - [ ] **测试覆盖扩展** — 随重构更新测试体系，补数据流水线、trace 提取等新模块的测试。
 - [ ] **MCP Inspector 测试流程** — 补充手动调试工具的操作文档。
 
----
-
 ## 工具清单
 
-> **注**：当前 16 个 MCP 工具基于 v0.1.0 架构。v0.2 重构后工具集将随微内核 + 插件架构重新设计，具体保留/新增/废弃哪些工具待重构方案敲定。
+> v0.2 内核 MCP Server（kernel/server.py）已实现 16 个工具：
 
 ```
-v0.1.0 (当前):
+保留（9）:
 skill_list        skill_get         skill_create       skill_update
-skill_delete      skill_analyze     skill_execute      skill_search
-skill_compose     skill_import      trace_get          trace_list
-trace_errors      optimizer_analyze optimizer_apply    optimizer_status
+skill_delete      skill_search      trace_get          trace_list
+trace_errors
+
+新增（5）:
+plugin_list       plugin_health     plugin_config      pipeline_run
+pipeline_status
+
+移除（7）:
+skill_execute     skill_analyze     skill_compose      skill_import
+optimizer_analyze optimizer_apply   optimizer_status
 ```
 
 ---
@@ -91,10 +101,14 @@ trace_errors      optimizer_analyze optimizer_apply    optimizer_status
 
 | 文件 | 用途 |
 |------|------|
-| `.mcp.json` | 项目级 MCP server 定义 |
-| `.claude/settings.json` | MCP 服务器启用配置 |
-| `docs/architecture-plan.md` | v0.1.0 完整架构设计 + 决策记录 |
+| `plugins.yaml` | 插件配置（声明式，内核启动时加载） |
+| `src/skill_engine/kernel/server.py` | 内核 MCP Server（16 工具） |
+| `src/skill_engine/kernel/skill_store.py` | Skill CRUD（SKILL.md 格式） |
+| `src/skill_engine/kernel/trace_store.py` | Trace 存储（SQLite WAL + v0.2 schema） |
+| `src/skill_engine/kernel/plugin_manager.py` | 插件生命周期管理 |
+| `src/skill_engine/plugins/data_pipeline/` | Data Pipeline Plugin |
+| `src/skill_engine/hooks/capture.py` | Claude Code hook 脚本（零依赖） |
 | `docs/architecture-v0.1.md` | v0.1.0 架构评审（22 缺陷分析） |
-| `docs/architecture-v0.2.md` | **v0.2 架构方向**（本次讨论结论） |
+| `docs/architecture-v0.2.md` | v0.2 架构方向 |
 | `docs/DEVELOPMENT.md` | 本文件，当前开发状态 |
 | `CLAUDE.md` | Claude Code 会话指引 |

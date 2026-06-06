@@ -1,4 +1,18 @@
 {
   "enableAllProjectMcpServers": true,
-  "enabledMcpjsonServers": ["skill-engine"]
+  "enabledMcpjsonServers": ["skill-system"],
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "command": "python3 /home/tgt/projects/Skill-System/src/skill_engine/hooks/capture.py"
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "command": "python3 /home/tgt/projects/Skill-System/src/skill_engine/hooks/capture.py"
+      }
+    ]
+  }
 }

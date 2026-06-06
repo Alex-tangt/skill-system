@@ -4,8 +4,8 @@ import asyncio
 import os
 import tempfile
 import pytest
-from skill_engine.storage.trace_store import TraceStore
-from skill_engine.models.trace import ExecutionTrace, StepTrace
+from skill_engine.kernel.trace_store import TraceStore
+from skill_engine.kernel.models.trace import ExecutionTrace, StepTrace
 
 
 @pytest.fixture
