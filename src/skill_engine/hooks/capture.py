@@ -18,7 +18,22 @@ import json
 import os
 import sqlite3
 import sys
+import logging
 from datetime import datetime, timezone
+
+# Persistent log file — hook errors are silent (don't crash Claude Code)
+# but we need to know when data is lost.
+LOG_PATH = os.environ.get(
+    "SKILL_ENGINE_HOOK_LOG",
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "traces", "hook.log"),
+)
+os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+logging.basicConfig(
+    filename=LOG_PATH,
+    level=logging.WARNING,
+    format="%(asctime)s %(levelname)s %(message)s",
+)
+_log = logging.getLogger("capture")
 
 
 def get_db_path() -> str:
@@ -80,7 +95,11 @@ def capture() -> None:
         if not raw.strip():
             sys.exit(0)
         hook_input = json.loads(raw)
-    except (json.JSONDecodeError, Exception):
+    except json.JSONDecodeError:
+        _log.warning("Invalid JSON from stdin: %s", raw[:200] if raw else "(empty)")
+        sys.exit(0)
+    except Exception:
+        _log.exception("Unexpected error reading hook input")
         sys.exit(0)
 
     session_id = hook_input.get("session_id", "unknown")
@@ -117,8 +136,7 @@ def capture() -> None:
         conn.commit()
         conn.close()
     except sqlite3.Error as e:
-        # Don't crash the hook — log to stderr and exit cleanly
-        print(f"capture.py: DB error: {e}", file=sys.stderr)
+        _log.error("DB error (data lost): %s", e)
         sys.exit(0)
 
     # Signal success to Claude Code

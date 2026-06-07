@@ -36,40 +36,38 @@ class BaseExtractor(ABC):
 
 
 class SkillTriggerExtractor(BaseExtractor):
-    """Detects skill invocations by matching tool_name patterns.
+    """Detects skill invocations by matching skill scripts/ paths in tool input.
 
-    Matches MCP tool calls where tool_name looks like a skill trigger
-    (e.g. "mcp__skill-engine__skill_execute" or native skill commands).
+    In v0.2, skills are executed by Claude Code's native mechanism — this
+    means running scripts from skills/<name>/scripts/ or reading SKILL.md.
+    We detect these patterns from Bash/Read/Write tool input.
     """
 
     name = "skill-trigger"
     priority = 10
 
-    # Patterns that suggest a skill was invoked
-    SKILL_PATTERNS = [
-        re.compile(r"mcp__.*__skill_execute", re.IGNORECASE),
-        re.compile(r"skill[_\-]execute", re.IGNORECASE),
-    ]
+    # Patterns that suggest a skill script or SKILL.md was accessed
+    SKILL_SCRIPT_RE = re.compile(r"skills/([\w-]+)/scripts/", re.IGNORECASE)
+    SKILL_MD_RE = re.compile(r"skills/([\w-]+)/SKILL\.md", re.IGNORECASE)
 
     def can_extract(self, event: dict) -> bool:
-        tool_name = event.get("tool_name", "") or ""
-        return any(p.search(tool_name) for p in self.SKILL_PATTERNS)
+        tool_input = event.get("tool_input_json") or ""
+        return bool(self.SKILL_SCRIPT_RE.search(tool_input) or self.SKILL_MD_RE.search(tool_input))
 
     def extract(self, event: dict, trace_id: str) -> StepTrace | None:
-        try:
-            input_data = json.loads(event.get("tool_input_json", "{}") or "{}")
-            skill_id = input_data.get("skill_id", "") or input_data.get("name", "")
-        except (json.JSONDecodeError, TypeError):
-            skill_id = ""
+        tool_input = event.get("tool_input_json", "") or ""
+        # Try to extract skill name from the path
+        m = self.SKILL_SCRIPT_RE.search(tool_input) or self.SKILL_MD_RE.search(tool_input)
+        skill_id = m.group(1) if m else "unknown-skill"
 
         return StepTrace(
             id=str(uuid.uuid4()),
             trace_id=trace_id,
-            step_id=skill_id or "unknown-skill",
-            step_name=f"Skill: {skill_id}" if skill_id else "Unknown Skill Trigger",
+            step_id=skill_id,
+            step_name=f"Skill: {skill_id}",
             started_at=time.time(),
             status="succeeded",
-            input=input_data if isinstance(input_data, dict) else {},
+            input={"tool_name": event.get("tool_name", ""), "match": tool_input[:200]},
             output=None,
             event_type="tool_call",
             context_ref=event.get("id"),

@@ -9,7 +9,6 @@ from skill_engine.plugins.data_pipeline.extractors import (
     ErrorExtractor,
 )
 from skill_engine.plugins.data_pipeline.dedup import BaseDedup, SHA256Dedup
-from skill_engine.plugins.data_pipeline.triggers import BaseTrigger, ManualTrigger
 
 __all__ = [
     "DataPipelinePlugin",
@@ -20,6 +19,4 @@ __all__ = [
     "ErrorExtractor",
     "BaseDedup",
     "SHA256Dedup",
-    "BaseTrigger",
-    "ManualTrigger",
 ]

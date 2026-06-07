@@ -75,6 +75,7 @@
 - [ ] **认证模型** — MCP server 对外暴露时的 token 认证。
 - [ ] **测试覆盖扩展** — 随重构更新测试体系，补数据流水线、trace 提取等新模块的测试。
 - [ ] **MCP Inspector 测试流程** — 补充手动调试工具的操作文档。
+- [ ] **内核公共 API 层（插件隔离）** (#P-11) — 当前插件直接 import TraceStore/SkillStore，在 1 插件/1 人/1 存储的场景下没必要做抽象。但应：(1) 将 TraceStore 和 SkillStore 标记为内核私有，插件不直接 import；(2) 用薄 wrapper 函数暴露内核能力，以后加隔离只改 wrapper；(3) 第二个插件出现时自动触发此重构。触发条件：出现第二个消费者（另一个插件需要读写 trace/skill）。
 
 ## 工具清单
 
