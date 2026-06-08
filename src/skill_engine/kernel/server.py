@@ -16,7 +16,10 @@ mcp = FastMCP("skill-system-kernel")
 
 # ── Global state ──
 _plugin_manager: PluginManager | None = None
-_pipeline: Any = None  # DataPipelinePlugin instance
+_pipeline: Any = None  # Old DataPipelinePlugin instance (deprecated, kept for compat)
+_new_pipeline: Any = None  # AnalyzerEvolverRunner instance
+_pipeline_store: Any = None  # PipelineStore instance
+_segment_watcher: Any = None  # SegmentWatcher instance
 
 
 def get_skill_store() -> SkillStore:
@@ -34,7 +37,7 @@ def get_plugin_manager() -> PluginManager:
 
 
 def get_pipeline():
-    """Lazy-init the data pipeline (direct Python, not MCP)."""
+    """Lazy-init the old data pipeline (kept for trace_get/trace_list/trace_errors)."""
     global _pipeline
     if _pipeline is None:
         from skill_engine.plugins.data_pipeline.plugin import DataPipelinePlugin
@@ -44,6 +47,44 @@ def get_pipeline():
         })
         asyncio.run(_pipeline.initialize())
     return _pipeline
+
+
+def get_new_pipeline():
+    """Lazy-init the v0.3 transcript-native pipeline."""
+    global _new_pipeline, _pipeline_store, _segment_watcher
+    if _new_pipeline is None:
+        from skill_engine.pipeline.llm_client_impl import AnthropicLLMClient
+        from skill_engine.pipeline.pipeline_store import PipelineStore
+        from skill_engine.pipeline.analyzer_evolver import AnalyzerEvolverRunner
+        from skill_engine.pipeline.segment_watcher import SegmentWatcher
+
+        db_path = os.environ.get(
+            "SKILL_ENGINE_PIPELINE_DB",
+            "./traces/pipeline.db",
+        )
+        model = os.environ.get("ANTHROPIC_MODEL")
+
+        _pipeline_store = PipelineStore(db_path)
+        asyncio.run(_pipeline_store.initialize())
+
+        llm = AnthropicLLMClient(model=model)
+
+        _new_pipeline = AnalyzerEvolverRunner(
+            llm_client=llm,
+            segment_store=_pipeline_store.segments,
+            skill_store=get_skill_store(),
+            pipeline_store=_pipeline_store,
+            analysis_queue=asyncio.Queue(),
+            validator_queue=asyncio.Queue(),
+            model=model,
+        )
+
+        _segment_watcher = SegmentWatcher(
+            store=_pipeline_store.segments,
+            analysis_queue=_new_pipeline._analysis_queue,
+        )
+
+    return _new_pipeline, _pipeline_store, _segment_watcher
 
 
 # ── Skill tools (kernel: read-only, for LLM) ──
@@ -112,11 +153,115 @@ def skill_search(query: str, top_k: int = 5) -> str:
     return json.dumps(output)
 
 
+# ── Pipeline v0.3 tools ──
+
+
+@mcp.tool(
+    name="pipeline_segments",
+    description="List all segments for the current or specified session.",
+)
+def pipeline_segments(session_id: str = "") -> str:
+    _, store, _ = get_new_pipeline()
+
+    sid = session_id or os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+    if not sid:
+        return json.dumps({"error": "No session_id provided and CLAUDE_CODE_SESSION_ID not set"})
+
+    try:
+        rows = asyncio.run(store.segments.get_by_session(sid))
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+    return json.dumps([
+        {
+            "id": r["id"][:8] + "...",
+            "user_msg": r["user_msg"][:120],
+            "user_msg_index": r["user_msg_index"],
+            "has_next": r.get("next_id") is not None,
+            "created_at": r.get("created_at", ""),
+        }
+        for r in rows
+    ], ensure_ascii=False)
+
+
+@mcp.tool(
+    name="pipeline_segment_get",
+    description="Get a specific segment by ID, including execution trace.",
+)
+def pipeline_segment_get(segment_id: str) -> str:
+    _, store, _ = get_new_pipeline()
+
+    try:
+        row = asyncio.run(store.segments.get(segment_id))
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+    if not row:
+        return json.dumps({"error": f"Segment not found: {segment_id}"})
+
+    return json.dumps({
+        "id": row["id"],
+        "session_id": row.get("session_id", ""),
+        "user_msg": row["user_msg"],
+        "user_msg_index": row["user_msg_index"],
+        "stats": json.loads(row.get("stats_json", "{}")),
+        "execution": json.loads(row.get("execution_json", "[]")),
+        "prev_id": row.get("prev_id"),
+        "next_id": row.get("next_id"),
+        "skills_available": json.loads(row.get("skills_available", "[]")),
+    }, ensure_ascii=False)
+
+
+@mcp.tool(
+    name="pipeline_analyze",
+    description="Run Phase A analysis on a specific segment. Returns analysis results.",
+)
+def pipeline_analyze(segment_id: str) -> str:
+    runner, store, _ = get_new_pipeline()
+
+    try:
+        analysis, patches = asyncio.run(runner.analyze_and_evolve(segment_id))
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+    if analysis is None:
+        return json.dumps({"error": "Segment not found"})
+
+    return json.dumps({
+        "task_completed": analysis.task_completed,
+        "execution_note": analysis.execution_note,
+        "skill_judgments": [j.to_dict() for j in analysis.skill_judgments],
+        "evolution_suggestions": [s.to_dict() for s in analysis.evolution_suggestions],
+        "tool_issues": analysis.tool_issues,
+        "patches_produced": len(patches),
+    }, ensure_ascii=False)
+
+
+@mcp.tool(
+    name="pipeline_watch",
+    description="Start watching the current session transcript for new segments.",
+)
+def pipeline_watch(session_id: str = "") -> str:
+    _, _, watcher = get_new_pipeline()
+
+    sid = session_id or os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+    if not sid:
+        return json.dumps({"error": "No session_id available"})
+
+    # Start watcher as background task
+    asyncio.create_task(watcher.watch(sid))
+
+    return json.dumps({
+        "status": "watching",
+        "session_id": sid,
+    })
+
+
 # ── Entry point ──
 
 
 def main():
-    """Start the kernel MCP server (3 tools for LLM)."""
+    """Start the kernel MCP server."""
     mcp.run(transport="stdio")
 
 

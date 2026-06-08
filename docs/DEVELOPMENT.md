@@ -53,11 +53,40 @@
 
 ---
 
+### Pipeline v0.3 重构（2026-06-08）
+
+- [x] **OpenSpace 深度调研** — 完整阅读 OpenSpace 源码（evolver/patch/store/conversation_formatter/quality/registry），提炼 8 类可借鉴设计模式。写入 [openspace-architecture-insights.md](openspace-architecture-insights.md)。
+- [x] **Transcript 机制验证** — 发现 Claude Code 内置 transcript JSONL（`~/.claude/projects/<sanitized_cwd>/<session_id>.jsonl`），验证可通过 `CLAUDE_CODE_SESSION_ID` + `PWD` 推导路径，387 条消息/20 user messages 分类正确。
+- [x] **架构设计讨论** — 多轮深入讨论：实时触发策略（链式 segment）、分析与进化合并（共享上下文）、验证器独立（I/O 分离）、分层隔离阻断递归、Meta 信号驱动优化。
+- [x] **架构文档** — [pipeline-refactor-v0.3.md](pipeline-refactor-v0.3.md) 完整架构方案，含模块重组逻辑、异步协程设计、迁移计划。
+- [x] **Step 1: 基础设施** — `transcript_reader.py`（JSONL 惰性读取 + 消息类型分类）+ `models.py`（Segment/SegmentStats/ExecutionAnalysis/SkillPatch 等 8 个 dataclass）+ `segment_store.py`（SQLite CRUD + 链表遍历）。
+- [x] **Step 2: Segmentation** — `segmenter.py`（按 user message 切分 + 优先级预算截断，借鉴 OpenSpace）+ `segment_watcher.py`（Task 1 协程，监听 transcript 实时创建 segment）。
+- [x] **Step 3: Analyzer-Evolver** — `llm_client.py`（LLMClient 协议 + 内置分析工具定义）+ `analysis_prompt.py`（Phase A prompt 模板）+ `analysis_runner.py`（Phase A LLM agent loop）+ `evolution_runner.py`（Phase B 三格式 patch 生成）+ `analyzer_evolver.py`（Phase A+B 编排 + 持久化 + skill_record 更新）。
+- [x] **Step 4: Validator + Metric Monitor** — `validator.py`（双层验证：L1 机械检查 + L2 LLM 语义检查）+ `metric_monitor.py`（纯 SQL 信号源，扫描 skill_records 健康指标）。
+- [x] **Step 5: Meta Signal Detector** — `meta_signal_detector.py`（Task 4 低频后台，检测分析 skill 退化信号：格式错误率/低信号/退化，触发优化）。
+- [x] **LLM Client 实现** — `llm_client_impl.py`（Anthropic 兼容 API，stdlib urllib 零新依赖，DeepSeek v4-pro 实测连通）。
+- [x] **Pipeline DB** — `pipeline_store.py`（统一 DB：segments + execution_analyses + analysis_traces + skill_records 四表）。
+- [x] **Server 集成** — `server.py` 新增 4 个 MCP 工具（pipeline_segments/pipeline_segment_get/pipeline_analyze/pipeline_watch），旧 DataPipelinePlugin 保留兼容。
+- [x] **E2E 验证** — 真实 segment → Phase A 分析 → 产出 EvolutionSuggestion + SkillPatch → 持久化到 DB。61 个已有测试零回归。
+
+### 当前状态
+
+**新 pipeline 已可运行，但手动挡。** 需显式调用 `pipeline_watch` 开始监听 transcript。不自动启动 — 分析 skill 的 SKILL.md 尚未创建，裸 prompt 模板的质量未经调优。
+
+### 下一步
+
+- [ ] **创建分析 skill** — 把 Phase A prompt 模板固化为 `skills/pipeline-analyzer/SKILL.md`，可被 Meta Signal Detector 迭代优化。
+- [ ] **种子数据** — 3-5 个手动标注的分析案例，作为分析 skill 质量的参照基线。
+- [ ] **保守模式上线** — low confidence 建议只记录不执行，积累为 Meta 优化信号。
+- [ ] **旧组件归档** — 新 pipeline 稳定后正式废弃 capture.py/history.db/extractors.py。
+
+---
+
 ## 待解决
 
 ### 高优先级（阻断真实使用）
 
-- [ ] **真实场景数据测试** (#P-10) — 重启 Claude Code 后验证完整数据流：Hook 采集 → History DB → pipeline_run → Trace DB → trace_get。重点测试：去重效果、提取器准确率、大量事件下的性能。当前所有组件单测通过，但缺少端到端真实数据验证。
+- [x] ~~**真实场景数据测试** (#P-10)~~ — Pipeline v0.3 E2E 验证已完成：transcript → segment → Phase A 分析 → EvolutionSuggestion + SkillPatch → 持久化。
 
 ### 中优先级（体验缺口）
 
@@ -79,19 +108,23 @@
 
 ## 工具清单
 
-> v0.2 内核 MCP Server（kernel/server.py）已实现 16 个工具：
+> v0.2 内核 MCP Server（kernel/server.py）已实现 16 个工具。v0.3 新增 4 个 pipeline 工具。
 
 ```
-保留（9）:
+v0.2 保留（9）:
 skill_list        skill_get         skill_create       skill_update
 skill_delete      skill_search      trace_get          trace_list
 trace_errors
 
-新增（5）:
+v0.2 新增（5）:
 plugin_list       plugin_health     plugin_config      pipeline_run
 pipeline_status
 
-移除（7）:
+v0.3 新增（4）:
+pipeline_segments       pipeline_segment_get
+pipeline_analyze        pipeline_watch
+
+v0.1 移除（7）:
 skill_execute     skill_analyze     skill_compose      skill_import
 optimizer_analyze optimizer_apply   optimizer_status
 ```
@@ -103,13 +136,16 @@ optimizer_analyze optimizer_apply   optimizer_status
 | 文件 | 用途 |
 |------|------|
 | `plugins.yaml` | 插件配置（声明式，内核启动时加载） |
-| `src/skill_engine/kernel/server.py` | 内核 MCP Server（16 工具） |
+| `src/skill_engine/kernel/server.py` | 内核 MCP Server（16+4 工具） |
 | `src/skill_engine/kernel/skill_store.py` | Skill CRUD（SKILL.md 格式） |
 | `src/skill_engine/kernel/trace_store.py` | Trace 存储（SQLite WAL + v0.2 schema） |
 | `src/skill_engine/kernel/plugin_manager.py` | 插件生命周期管理 |
-| `src/skill_engine/plugins/data_pipeline/` | Data Pipeline Plugin |
-| `src/skill_engine/hooks/capture.py` | Claude Code hook 脚本（零依赖） |
+| `src/skill_engine/pipeline/` | **v0.3 新 pipeline**（16 文件） |
+| `src/skill_engine/plugins/data_pipeline/` | Data Pipeline Plugin（旧，保留兼容） |
+| `src/skill_engine/hooks/capture.py` | Claude Code hook 脚本（旧，保留兼容） |
 | `docs/architecture-v0.1.md` | v0.1.0 架构评审（22 缺陷分析） |
 | `docs/architecture-v0.2.md` | v0.2 架构方向 |
+| `docs/pipeline-refactor-v0.3.md` | **v0.3 pipeline 架构方案** |
+| `docs/openspace-architecture-insights.md` | **OpenSpace 源码洞察** |
 | `docs/DEVELOPMENT.md` | 本文件，当前开发状态 |
 | `CLAUDE.md` | Claude Code 会话指引 |
