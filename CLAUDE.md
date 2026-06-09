@@ -165,6 +165,8 @@ python3 skills/dev-diary/scripts/diary.py \
 
 ## Conventions
 
+### Code style
+
 - Every `.py` file needs `from __future__ import annotations` (Python 3.10 compat for `X | None` syntax).
 - MCP tool functions return JSON strings.
 - Skill saves automatically create `.backup` of the previous SKILL.md.
@@ -172,6 +174,23 @@ python3 skills/dev-diary/scripts/diary.py \
 - Hook scripts (`capture.py`) must be zero-dependency — stdlib only.
 - No `sqlite3` CLI — query DBs with `python3 -c "import sqlite3; ..."`.
 - Pipeline LLM client (`llm_client_impl.py`) uses stdlib `urllib` — zero additional dependencies.
+
+### Maintenance workflow (MANDATORY)
+
+After every refactoring session or feature development session, **before** committing:
+
+1. **Update DEV diary** — Add entries to `docs/DEVELOPMENT.md` documenting what was done, with checkboxes. Use the diary script: `python3 skills/dev-diary/scripts/diary.py --file docs/DEVELOPMENT.md --operation add --title "..." --priority high --description "..."`. Then mark completed items `[x]` and update the "Next steps" section.
+
+2. **Update CLAUDE.md** — Sync the following sections if they changed: directory structure, architecture description, data flow diagram, MCP tool list, known issues, key docs table, commands.
+
+3. **Update README.md and README-zh.md** — Before every `git push`, sync both READMEs with: current project description, updated architecture (v0.2 → v0.3), complete MCP tool list, new/removed components, updated quick-start commands.
+
+**Push checklist (run before `git push`):**
+- [ ] `docs/DEVELOPMENT.md` — progress entries up to date
+- [ ] `CLAUDE.md` — architecture, tools, known issues current
+- [ ] `README.md` — synced with latest changes
+- [ ] `README-zh.md` — synced with latest changes
+- [ ] `python -m pytest tests/ -q` — all tests pass
 
 ## Key docs
 
