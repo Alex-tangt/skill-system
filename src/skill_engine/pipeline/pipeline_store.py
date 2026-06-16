@@ -134,6 +134,37 @@ class PipelineStore:
                 ON skill_records(name)
             """)
 
+            # Validator tables
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS validator_test_cases (
+                    id TEXT PRIMARY KEY,
+                    skill_id TEXT NOT NULL,
+                    input_desc TEXT NOT NULL,
+                    expected_behavior TEXT NOT NULL,
+                    source TEXT DEFAULT 'execution_error',
+                    created_at TEXT DEFAULT (datetime('now'))
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS validator_runs (
+                    id TEXT PRIMARY KEY,
+                    skill_id TEXT NOT NULL,
+                    patch_hash TEXT,
+                    verdict TEXT NOT NULL,
+                    failed_cases TEXT DEFAULT '[]',
+                    reason TEXT DEFAULT '',
+                    created_at TEXT DEFAULT (datetime('now'))
+                )
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_vtc_skill
+                ON validator_test_cases(skill_id)
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_vr_skill
+                ON validator_runs(skill_id, created_at)
+            """)
+
             conn.commit()
         finally:
             conn.close()
@@ -168,16 +199,42 @@ class PipelineStore:
             conn.close()
 
     async def save_analysis(
-        self, segment_id: str, analysis: ExecutionAnalysis
+        self, segment_id: str, analysis: Any
     ) -> str:
-        """Persist an ExecutionAnalysis. Returns the analysis ID."""
+        """Persist an analysis (may be ExecutionAnalysis or dict). Returns the ID."""
         import asyncio as _asyncio
+        import uuid as _uuid
 
-        analysis_id = str(uuid.uuid4())
+        analysis_id = str(_uuid.uuid4())
+        diagnosis = getattr(analysis, "diagnosis", "") or ""
+        error_summary = getattr(analysis, "error_summary", []) or []
+        analyzed_at = getattr(analysis, "analyzed_at", "") or datetime.now(timezone.utc).isoformat()
+
         await _asyncio.to_thread(
-            self._save_analysis_sync, analysis_id, segment_id, analysis
+            self._save_analysis_sync,
+            analysis_id, segment_id, diagnosis,
+            json.dumps(error_summary), analyzed_at,
         )
         return analysis_id
+
+    @_db_retry()
+    def _save_analysis_sync(
+        self, analysis_id: str, segment_id: str,
+        diagnosis: str, error_summary_json: str, analyzed_at: str,
+    ) -> None:
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute(
+                """INSERT OR REPLACE INTO execution_analyses
+                   (id, segment_id, task_completed, execution_note,
+                    skill_judgments_json, evolution_suggestions_json,
+                    tool_issues_json, analyzed_at)
+                   VALUES (?, ?, 1, ?, '[]', '[]', ?, ?)""",
+                (analysis_id, segment_id, diagnosis, error_summary_json, analyzed_at),
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
     @_db_retry()
     def _get_analysis_sync(self, segment_id: str) -> Optional[dict]:

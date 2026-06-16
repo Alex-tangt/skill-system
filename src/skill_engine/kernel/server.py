@@ -87,6 +87,19 @@ def get_new_pipeline():
     return _new_pipeline, _pipeline_store, _segment_watcher
 
 
+def get_validator():
+    """Lazy-init the Validator (shared by pipeline and MCP tools)."""
+    from skill_engine.pipeline.validator import Validator
+
+    db_path = os.environ.get(
+        "SKILL_ENGINE_VALIDATOR_DB",
+        "./traces/validator.db",
+    )
+    validator = Validator(db_path)
+    asyncio.run(validator.initialize())
+    return validator
+
+
 # ── Skill tools (kernel: read-only, for LLM) ──
 
 
@@ -248,13 +261,48 @@ def pipeline_watch(session_id: str = "") -> str:
     if not sid:
         return json.dumps({"error": "No session_id available"})
 
-    # Start watcher as background task
     asyncio.create_task(watcher.watch(sid))
 
     return json.dumps({
         "status": "watching",
         "session_id": sid,
     })
+
+
+# ── Validator tools ──
+
+
+@mcp.tool(
+    name="pipeline_validator_add_case",
+    description="Add a test case to the validator for a specific skill. Test cases are used to validate future skill patches.",
+)
+def pipeline_validator_add_case(
+    skill_id: str,
+    input_desc: str,
+    expected_behavior: str,
+    source: str = "manual",
+) -> str:
+    validator = get_validator()
+    try:
+        case_id = asyncio.run(
+            validator.add_test_case(skill_id, input_desc, expected_behavior, source)
+        )
+        return json.dumps({"status": "ok", "case_id": case_id})
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool(
+    name="pipeline_validator_cases",
+    description="List all test cases and recent validation runs for a skill.",
+)
+def pipeline_validator_cases(skill_id: str) -> str:
+    validator = get_validator()
+    try:
+        data = asyncio.run(validator.run_test_suite(skill_id))
+        return json.dumps(data, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 # ── Entry point ──

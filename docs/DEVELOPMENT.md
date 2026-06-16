@@ -79,6 +79,7 @@
 - [ ] **种子数据** — 3-5 个手动标注的分析案例，作为分析 skill 质量的参照基线。
 - [ ] **保守模式上线** — low confidence 建议只记录不执行，积累为 Meta 优化信号。
 - [ ] **旧组件归档** — 新 pipeline 稳定后正式废弃 capture.py/history.db/extractors.py。
+- [ ] **Pipeline 调试面板** (#P-12) — Flask + 纯 HTML 的轻量可视化平台：Segments 列表/详情、Analysis 结果查看、Analysis Trace 查看、Skill 质量趋势。核心功能 ~2 天，完整版（含版本 DAG）~5 天。等分析 skill 跑通几个真实案例后启动。
 
 ---
 
