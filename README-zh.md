@@ -1,177 +1,58 @@
 # Skill-System
 
-基于微内核架构的 AI Agent 技能管理平台。技能遵循 **Agent Skills 开放标准**（SKILL.md），由 Claude Code 原生机制执行。提供元数据管理、插件架构、以及用于 trace 提取与优化的数据流水线。
+**基于 Transcript 的技能进化平台。** 技能遵循 [Agent Skills 开放标准](https://agentskills.io)（SKILL.md）。Pipeline v0.3 直接读取 Claude Code transcript，分析 agent 执行过程，自动进化技能。
 
-## 这是什么？
+## 亮点
 
-Skill-System 是一个 MCP（Model Context Protocol）服务器，用于管理 AI Agent 技能：
+- **Transcript 原生** — 无需 hook。直接读取 Claude Code 内置 transcript JSONL。
+- **实时分析** — 按用户消息分段，每次任务完成后即时分析。
+- **技能自我进化** — FIX（修复）、DERIVED（特化）、CAPTURED（提取）三种进化模式。
+- **带测试用例的验证器** — 累积回归测试，防止过拟合单个错误。
+- **内置调试面板** — Flask Web UI，查看 segments、分析结果、技能、验证器。
 
-- **开放标准** — 技能采用 [Agent Skills](https://agentskills.io) 格式（`SKILL.md`），兼容 Claude Code、Cursor、Copilot 等工具
-- **微内核架构** — 内核负责元数据 + 插件协调；插件（数据流水线、优化器）作为独立 MCP 服务器
-- **Hook 驱动追踪** — Claude Code Hook 截取 LLM 上下文（messages + CoT）；数据流水线提取结构化 trace
-- **可扩展** — 策略接口（`BaseExtractor`、`BaseDedup`、`BaseTrigger`、`BasePlugin`）配 MVP 实现，切换算法不改调用方
-
-以 stdio MCP 服务器形态运行，任何 MCP 客户端即插即用。
+以 stdio MCP Server 方式运行（20 个工具），可被 Claude Code 或任何 MCP 客户端消费。
 
 ## 快速开始
 
 ```bash
-# 安装
 pip install -e ".[dev]"
-
-# 运行测试
-python -m pytest tests/ -v
-
-# 启动内核 MCP 服务器
-python -m skill_engine.kernel.server
+python -m pytest tests/ -v                         # 80 个测试
+python -m skill_engine.kernel.server               # 启动 MCP Server
+python3 scripts/bootstrap_pipeline.py --dry-run    # 分段当前会话
+python3 scripts/bootstrap_pipeline.py              # 分段 + 分析
+python3 -m skill_engine.dashboard --port 7788      # 调试面板
 ```
 
-配置 MCP 客户端（`.mcp.json`）：
-
-```json
-{
-  "mcpServers": {
-    "skill-system": {
-      "command": "python3",
-      "args": ["-m", "skill_engine.kernel.server"],
-      "env": {
-        "SKILL_ENGINE_SKILLS_DIR": "./skills",
-        "SKILL_ENGINE_TRACES_DB": "./traces/traces.db",
-        "SKILL_ENGINE_PLUGINS_CONFIG": "./plugins.yaml"
-      }
-    }
-  }
-}
-```
-
-启用 Claude Code Hook 以采集追踪数据（`.claude/settings.json`）：
-
-```json
-{
-  "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "*",
-        "command": "python3 src/skill_engine/hooks/capture.py"
-      }
-    ]
-  }
-}
-```
-
-## 架构
-
-### 数据流
+## 架构（v0.3）
 
 ```
-Claude Code 会话
-  ├── 原生 skill 机制（执行）
-  └── Hook（PostToolUse / UserPromptSubmit）
-        │
-        ▼
-      capture.py ──► History DB ──► Data Pipeline Plugin ──► Trace DB
-                                         │
-                                         └──（未来）Optimizer Plugin
+Claude Code Session
+  │  Transcript JSONL（自动生成，无需 hook）
+  │
+  ├── Segment Watcher（实时：下一条用户消息 → 前一段可分析）
+  ├── Analyzer-Evolver（Phase A: 诊断 → Phase B: patch with validate→fix）
+  ├── Metric Monitor（纯 SQL 信号源）
+  └── Meta Signal Detector（低频分析 skill 优化）
 ```
 
-### 核心组件
+## MCP 工具（20 个）
 
-| 组件 | 作用 |
-|---|---|
-| `kernel/server.py` | MCP 服务器，16 个工具（skill CRUD、trace 查询、插件管理、流水线） |
-| `kernel/skill_store.py` | SKILL.md 文件系统 CRUD，自动 `.backup` |
-| `kernel/trace_store.py` | SQLite（WAL 模式，aiosqlite），v0.2 schema |
-| `kernel/plugin_manager.py` | 插件生命周期（加载 `plugins.yaml`） |
-| `plugins/data_pipeline/` | 从原始 LLM 上下文提取结构化 trace |
-| `hooks/capture.py` | 零依赖 Claude Code hook 脚本 |
-
-### MCP 工具（16 个）
-
-**Skill CRUD:** `skill_list`、`skill_get`、`skill_create`、`skill_update`、`skill_delete`
-
-**搜索:** `skill_search`
-
-**追踪:** `trace_get`、`trace_list`、`trace_errors`
-
-**插件:** `plugin_list`、`plugin_health`、`plugin_config`
-
-**流水线:** `pipeline_run`、`pipeline_status`
-
-### 插件系统
-
-插件实现 `kernel/plugin_interface.py::BasePlugin`。通过 `plugins.yaml` 配置：
-
-```yaml
-plugins:
-  data-pipeline:
-    name: data-pipeline
-    type: internal
-    module: skill_engine.plugins.data_pipeline.plugin
-    description: 从原始 LLM 上下文提取结构化 trace
-    config:
-      history_db_path: ./traces/history.db
-```
-
-### 可扩展性
-
-四个策略接口，均可替换实现：
-
-| 接口 | MVP | 可升级为 |
-|------|-----|---------|
-| `BaseExtractor` | 正则（3 个提取器） | LLM 提取 |
-| `BaseDedup` | SHA256 精确去重 | 语义 / SimHash 去重 |
-| `BaseTrigger` | 手动（`pipeline_run`） | 定时 / 事件驱动 |
-| `BasePlugin` | 内部模块 | 外部 MCP 服务器 |
-
-## 技能目录
-
-技能遵循 Agent Skills 标准。每个技能是一个包含 `SKILL.md` 的目录：
-
-```
-skills/
-├── hello-world/
-│   ├── SKILL.md
-│   └── scripts/echo.py
-├── pdf-to-markdown/
-│   ├── SKILL.md
-│   └── scripts/extract.py
-└── dev-diary/
-    ├── SKILL.md
-    └── scripts/diary.py
-```
-
-示例 `SKILL.md`：
-
-```markdown
----
-name: hello-world
-description: 一个简单的回显技能，用于验证技能系统是否正常工作。
-license: MIT
----
-# Hello World
-
-## 工作流
-1. 回显输入文本
-2. 返回回显结果
-
-## 输入
-- `text`：任意字符串
-```
-
-## 开发
-
-```bash
-pip install -e ".[dev]"                       # 安装及开发依赖
-python -m pytest tests/ -v                    # 运行全部测试（61 个）
-python -m skill_engine.kernel.server          # 启动内核 MCP 服务器
-```
+| 类别 | 工具 |
+|------|------|
+| Skill CRUD | `skill_list`, `skill_get`, `skill_create`, `skill_update`, `skill_delete` |
+| 搜索 | `skill_search` |
+| Trace | `trace_get`, `trace_list`, `trace_errors` |
+| 插件 | `plugin_list`, `plugin_health`, `plugin_config`, `pipeline_run`, `pipeline_status` |
+| Pipeline v0.3 | `pipeline_segments`, `pipeline_segment_get`, `pipeline_analyze`, `pipeline_watch` |
+| 验证器 | `pipeline_validator_add_case`, `pipeline_validator_cases` |
 
 ## 文档
 
-- [architecture-v0.2.md](docs/architecture-v0.2.md) — v0.2 架构方向
-- [DEVELOPMENT.md](docs/DEVELOPMENT.md) — 开发状态追踪
+- [pipeline-refactor-v0.3.md](docs/pipeline-refactor-v0.3.md) — 完整架构设计
+- [openspace-architecture-insights.md](docs/openspace-architecture-insights.md) — OpenSpace 设计洞察
+- [DEVELOPMENT.md](docs/DEVELOPMENT.md) — 开发日记
 - [CLAUDE.md](CLAUDE.md) — Claude Code 会话指引
 
-## 许可证
+## License
 
-MIT — 详见 [LICENSE](LICENSE)。
+MIT

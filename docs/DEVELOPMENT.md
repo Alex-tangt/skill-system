@@ -91,11 +91,21 @@ pipeline_watch           # 开始实时监听
 pipeline_analyze <id>    # 分析指定 segment
 ```
 
+### 项目完成冲刺（2026-06-08 晚间）
+
+- [x] **Phase 1: Pipeline 稳定性** — 增量 Segmenter（`segment_from`）、Watcher 自动启动、LLM 3 次重试、19 个新测试（80 total）。
+- [x] **Phase 2: Skill 生态 + 进化验证** — hello-world scripts/、进化 E2E：模拟错误 → Phase A 诊断 → Phase B DIFF patch。完整闭环。
+- [x] **Phase 3: 调试面板** — `dashboard.py`（Flask, 6 routes）：Dashboard 首页、Segments 列表/详情、Skills、Validator。
+- [x] **Phase 4: 清理 + README** — README.md + README-zh.md 同步 v0.3 架构、20 tools、bootstrap 脚本。CLAUDE.md 已知问题更新。
+
+### 当前状态
+
+**项目可对外展示。** 80 tests pass。Evolution 闭环已验证。Dashboard 可启动。
+
 ### 下一步
 
 - [ ] **生产监控** — 在实际使用中观察分析质量，积累 analysis_traces 数据。
 - [ ] **Meta Signal Detector 首次运行** — 积累 20+ analysis traces 后触发分析 skill 优化。
-- [ ] **Pipeline 调试面板** (#P-12) — Flask + 纯 HTML。核心功能 ~2 天。
 - [ ] **旧组件归档** — 新 pipeline 稳定后废弃 capture.py/history.db/extractors.py。
 
 ---

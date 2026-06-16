@@ -1,32 +1,29 @@
 # Skill-System
 
-A microkernel-based skill management platform for AI agents. Skills follow the **Agent Skills open standard** (SKILL.md), executed by the native Claude Code mechanism. Skill-System provides metadata management, a plugin architecture, and a data pipeline for trace extraction and optimization.
+**Transcript-native skill evolution platform for AI agents.** Skills follow the [Agent Skills open standard](https://agentskills.io) (SKILL.md). Pipeline v0.3 reads Claude Code transcripts directly, analyzes agent execution, and evolves skills automatically.
 
-## What is this?
+## Highlights
 
-Skill-System is an MCP (Model Context Protocol) server that manages AI agent skills:
+- **Transcript-native** — No hooks needed. Reads Claude Code's built-in transcript JSONL.
+- **Real-time analysis** — Segments conversation by user message, analyzes after each task.
+- **Self-evolving skills** — FIX (repair), DERIVED (specialize), CAPTURED (extract) evolution modes.
+- **Validator with test cases** — Accumulating regression tests prevent overfitting to single errors.
+- **Built-in debug dashboard** — Flask web UI for inspecting segments, analyses, skills, and validator.
 
-- **Open standard** — Skills use the [Agent Skills](https://agentskills.io) format (`SKILL.md`), compatible with Claude Code, Cursor, Copilot, and other tools
-- **Microkernel architecture** — Core handles metadata + plugin coordination; plugins (data pipeline, optimizer) are independent MCP servers
-- **Hook-based tracing** — Claude Code hooks capture LLM context (messages + CoT); a data pipeline extracts structured traces
-- **Extensible** — Strategy interfaces (`BaseExtractor`, `BaseDedup`, `BaseTrigger`, `BasePlugin`) with MVP implementations, swappable without changing callers
-
-Runs as a stdio MCP server consumable by any MCP client.
+Runs as a stdio MCP server (20 tools) consumable by Claude Code or any MCP client.
 
 ## Quick Start
 
 ```bash
-# Install
 pip install -e ".[dev]"
-
-# Run tests
-python -m pytest tests/ -v
-
-# Start the kernel MCP server
-python -m skill_engine.kernel.server
+python -m pytest tests/ -v                         # 80 tests
+python -m skill_engine.kernel.server               # MCP server (stdio)
+python3 scripts/bootstrap_pipeline.py --dry-run    # segment current session
+python3 scripts/bootstrap_pipeline.py              # segment + analyze
+python3 -m skill_engine.dashboard --port 7788      # debug dashboard
 ```
 
-Configure your MCP client (`.mcp.json`):
+### MCP Client Configuration
 
 ```json
 {
@@ -36,142 +33,76 @@ Configure your MCP client (`.mcp.json`):
       "args": ["-m", "skill_engine.kernel.server"],
       "env": {
         "SKILL_ENGINE_SKILLS_DIR": "./skills",
-        "SKILL_ENGINE_TRACES_DB": "./traces/traces.db",
-        "SKILL_ENGINE_PLUGINS_CONFIG": "./plugins.yaml"
+        "SKILL_ENGINE_PIPELINE_DB": "./traces/pipeline.db"
       }
     }
   }
 }
 ```
 
-Enable Claude Code hooks for trace capture (`.claude/settings.json`):
-
-```json
-{
-  "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "*",
-        "command": "python3 skills/../src/skill_engine/hooks/capture.py"
-      }
-    ]
-  }
-}
-```
-
-## Architecture
-
-### Data Flow
+## Architecture (v0.3)
 
 ```
 Claude Code Session
-  ├── Native skill mechanism (execution)
-  └── Hooks (PostToolUse / UserPromptSubmit)
-        │
-        ▼
-      capture.py ──► History DB ──► Data Pipeline Plugin ──► Trace DB
-                                         │
-                                         └── (future) Optimizer Plugin
+  │  Transcript JSONL (auto-generated, no hooks)
+  │
+  ├── Segment Watcher (real-time: next user msg → prev segment ready)
+  ├── Analyzer-Evolver (Phase A: diagnosis → Phase B: patch with validate→fix loop)
+  ├── Metric Monitor (pure SQL signal source)
+  └── Meta Signal Detector (low-frequency analysis skill optimizer)
 ```
 
-### Core Components
+### MCP Tools (20 total)
+
+| Category | Tools |
+|----------|-------|
+| Skill CRUD | `skill_list`, `skill_get`, `skill_create`, `skill_update`, `skill_delete` |
+| Search | `skill_search` |
+| Trace | `trace_get`, `trace_list`, `trace_errors` |
+| Plugins | `plugin_list`, `plugin_health`, `plugin_config`, `pipeline_run`, `pipeline_status` |
+| Pipeline v0.3 | `pipeline_segments`, `pipeline_segment_get`, `pipeline_analyze`, `pipeline_watch` |
+| Validator | `pipeline_validator_add_case`, `pipeline_validator_cases` |
+
+### Key Components
 
 | Component | Role |
-|---|---|
-| `kernel/server.py` | MCP server with 16 tools (skill CRUD, trace queries, plugin management, pipeline) |
-| `kernel/skill_store.py` | File-system CRUD for SKILL.md files, auto `.backup` |
-| `kernel/trace_store.py` | SQLite (WAL mode, aiosqlite) with v0.2 schema |
-| `kernel/plugin_manager.py` | Plugin lifecycle (loads `plugins.yaml`) |
-| `plugins/data_pipeline/` | Extracts structured traces from raw LLM context |
-| `hooks/capture.py` | Zero-dependency script for Claude Code hook events |
-
-### MCP Tools (16 total)
-
-**Skill CRUD:** `skill_list`, `skill_get`, `skill_create`, `skill_update`, `skill_delete`
-
-**Search:** `skill_search`
-
-**Tracing:** `trace_get`, `trace_list`, `trace_errors`
-
-**Plugins:** `plugin_list`, `plugin_health`, `plugin_config`
-
-**Pipeline:** `pipeline_run`, `pipeline_status`
-
-### Plugin System
-
-Plugins implement `kernel/plugin_interface.py::BasePlugin`. Configured in `plugins.yaml`:
-
-```yaml
-plugins:
-  data-pipeline:
-    name: data-pipeline
-    type: internal
-    module: skill_engine.plugins.data_pipeline.plugin
-    description: Extract structured traces from raw LLM context
-    config:
-      history_db_path: ./traces/history.db
-```
-
-### Extensibility
-
-Four strategy interfaces with swappable implementations:
-
-| Interface | MVP | Upgrade Path |
-|-----------|-----|--------------|
-| `BaseExtractor` | Regex (3 extractors) | LLM-based extraction |
-| `BaseDedup` | SHA256 exact match | Semantic / SimHash dedup |
-| `BaseTrigger` | Manual (`pipeline_run`) | Cron / event-driven |
-| `BasePlugin` | Internal module | External MCP server |
+|-----------|------|
+| `pipeline/transcript_reader.py` | Claude Code transcript JSONL reader |
+| `pipeline/segmenter.py` | User-message segmentation + priority-budgeted truncation |
+| `pipeline/analyzer_evolver.py` | Phase A (diagnosis) + Phase B (patch with validate→fix) |
+| `pipeline/validator.py` | Optimizer's testing toolkit with accumulated test cases |
+| `pipeline/pipeline_store.py` | Unified SQLite DB (6 tables) |
+| `kernel/server.py` | MCP server entry point |
 
 ## Skills Directory
 
-Skills follow the Agent Skills standard. Each skill is a directory with a `SKILL.md`:
-
 ```
 skills/
-├── hello-world/
-│   ├── SKILL.md
-│   └── scripts/echo.py
-├── pdf-to-markdown/
-│   ├── SKILL.md
-│   └── scripts/extract.py
-└── dev-diary/
-    ├── SKILL.md
-    └── scripts/diary.py
-```
-
-Example `SKILL.md`:
-
-```markdown
----
-name: hello-world
-description: A simple demonstration skill that echoes input text.
-license: MIT
----
-# Hello World
-
-## Workflow
-1. Echo the input text
-2. Return the echoed result
-
-## Input
-- `text`: Any string to echo
+├── pipeline-analyzer/     # Meta-skill: analyzes execution traces
+├── hello-world/           # Demo skill with scripts/
+├── dev-diary/             # Development diary management
+├── git-status/            # Git repository status checker
+├── run-tests/             # Test suite runner
+├── markdown-stats/        # Markdown file analyzer
+└── pdf-to-markdown/       # PDF text extractor
 ```
 
 ## Development
 
 ```bash
-pip install -e ".[dev]"                       # install with dev deps
-python -m pytest tests/ -v                    # run all tests (61 tests)
-python -m skill_engine.kernel.server          # start kernel MCP server
+pip install -e ".[dev]"
+python -m pytest tests/ -v                           # run tests
+python3 scripts/bootstrap_pipeline.py --dry-run      # verify segmentation
+python3 scripts/bootstrap_pipeline.py                # segment + analyze
 ```
 
 ## Documentation
 
-- [architecture-v0.2.md](docs/architecture-v0.2.md) — v0.2 architecture direction
-- [DEVELOPMENT.md](docs/DEVELOPMENT.md) — development tracker
-- [CLAUDE.md](CLAUDE.md) — guidance for Claude Code sessions
+- [pipeline-refactor-v0.3.md](docs/pipeline-refactor-v0.3.md) — Full architecture design
+- [openspace-architecture-insights.md](docs/openspace-architecture-insights.md) — OpenSpace patterns
+- [DEVELOPMENT.md](docs/DEVELOPMENT.md) — Development tracker
+- [CLAUDE.md](CLAUDE.md) — Claude Code session guidance
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT
