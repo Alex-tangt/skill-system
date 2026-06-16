@@ -60,10 +60,26 @@ class AnalysisPromptBuilder:
 
     Args:
         skill_store: Used to load SKILL.md content.
+        analysis_skill_path: Path to the pipeline-analyzer SKILL.md.
     """
 
-    def __init__(self, skill_store: Any = None) -> None:
+    def __init__(self, skill_store: Any = None, analysis_skill_path: str = "") -> None:
         self._skill_store = skill_store
+        self._analysis_skill_path = analysis_skill_path or "skills/pipeline-analyzer/SKILL.md"
+
+    def _load_analysis_skill(self) -> str:
+        """Load the pipeline-analyzer skill body as the analysis instructions."""
+        from pathlib import Path as _Path
+        path = _Path(self._analysis_skill_path)
+        if path.exists():
+            content = path.read_text(encoding="utf-8")
+            # Extract body (after frontmatter)
+            if content.startswith("---"):
+                parts = content.split("---", 2)
+                if len(parts) >= 3:
+                    return parts[2].strip()
+            return content
+        return ""
 
     async def build(
         self,
@@ -76,7 +92,18 @@ class AnalysisPromptBuilder:
         execution_entries = json.loads(segment.execution_json)
         execution_trace = self._format_execution(execution_entries)
 
-        return _ANALYSIS_TEMPLATE.format(
+        # Prepend analysis skill if available
+        analysis_instructions = self._load_analysis_skill()
+        if analysis_instructions:
+            analysis_instructions = (
+                "# Analysis Instructions (from pipeline-analyzer skill)\n\n"
+                + analysis_instructions
+                + "\n\n---\n\n"
+            )
+        else:
+            analysis_instructions = ""
+
+        return analysis_instructions + _ANALYSIS_TEMPLATE.format(
             user_msg=segment.user_msg,
             prev_user_msg=prev_user_msg,
             next_user_msg=next_user_msg,

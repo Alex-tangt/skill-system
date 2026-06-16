@@ -68,20 +68,24 @@ def get_new_pipeline():
         asyncio.run(_pipeline_store.initialize())
 
         llm = AnthropicLLMClient(model=model)
+        validator = get_validator()
+
+        # Shared queue for watcher → runner communication
+        analysis_queue = asyncio.Queue()
 
         _new_pipeline = AnalyzerEvolverRunner(
             llm_client=llm,
             segment_store=_pipeline_store.segments,
             skill_store=get_skill_store(),
             pipeline_store=_pipeline_store,
-            analysis_queue=asyncio.Queue(),
-            validator_queue=asyncio.Queue(),
+            validator=validator,
+            analysis_queue=analysis_queue,
             model=model,
         )
 
         _segment_watcher = SegmentWatcher(
             store=_pipeline_store.segments,
-            analysis_queue=_new_pipeline._analysis_queue,
+            analysis_queue=analysis_queue,
         )
 
     return _new_pipeline, _pipeline_store, _segment_watcher

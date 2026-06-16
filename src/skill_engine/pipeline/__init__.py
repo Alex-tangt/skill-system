@@ -9,6 +9,7 @@ from skill_engine.pipeline.models import (
     ValidateResult,
 )
 from skill_engine.pipeline.segment_store import SegmentStore
+from skill_engine.pipeline.pipeline_store import PipelineStore
 from skill_engine.pipeline.segmenter import Segmenter
 from skill_engine.pipeline.segment_watcher import SegmentWatcher
 from skill_engine.pipeline.analysis_prompt import AnalysisPromptBuilder

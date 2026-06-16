@@ -69,17 +69,34 @@
 - [x] **Server 集成** — `server.py` 新增 4 个 MCP 工具（pipeline_segments/pipeline_segment_get/pipeline_analyze/pipeline_watch），旧 DataPipelinePlugin 保留兼容。
 - [x] **E2E 验证** — 真实 segment → Phase A 分析 → 产出 EvolutionSuggestion + SkillPatch → 持久化到 DB。61 个已有测试零回归。
 
+### Validator-as-Tool 重构 + 生产就绪（2026-06-08）
+
+- [x] **Validator 设计修正** — Validator 从独立 Pipeline 阶段改为 Optimizer（Phase B）的内部工具。提供 `validate_patch`/`add_test_case`/`run_test_suite` 三个工具。Optimizer 通过 `generate → validate → fix` 循环即改即测，避免过拟合。
+- [x] **分析输出简化** — 删除中间 JSON Schema（SkillJudgment/EvolutionSuggestion/ToolIssue 等），Phase A 输出自然语言诊断，直接作为 Phase B prompt 前缀。简化代码 +1440/-1918 行。
+- [x] **分析 skill 创建** — `skills/pipeline-analyzer/SKILL.md` v1.0.0，定义分析方法、输出格式、质量标准。AnalysisPromptBuilder 自动加载并注入为 system prompt。
+- [x] **Validator 种子数据** — 5 个基线测试用例（dev-diary/hello-world/run-tests/markdown-stats/git-status）。
+- [x] **Server 修复** — 共享队列（watcher + runner 同一 asyncio.Queue）+ Validator 注入 + 新增 2 个 MCP 工具（`pipeline_validator_add_case`/`pipeline_validator_cases`）。
+- [x] **Bootstrap 脚本** — `scripts/bootstrap_pipeline.py`：一键初始化 DB、种子 Validator、分段 transcript、分析 tool-using segments。
+- [x] **生产审计** — 6/6 检查项通过（Segmenter、SegmentStore、PipelineStore 六表、Validator、LLM Client、Phase A 真实分析）。
+
 ### 当前状态
 
-**新 pipeline 已可运行，但手动挡。** 需显式调用 `pipeline_watch` 开始监听 transcript。不自动启动 — 分析 skill 的 SKILL.md 尚未创建，裸 prompt 模板的质量未经调优。
+**Pipeline v0.3 生产就绪。** 启动方式：
+```bash
+# 初始化 + 分析当前 session
+python3 scripts/bootstrap_pipeline.py
+
+# 或在 MCP Server 中调用
+pipeline_watch           # 开始实时监听
+pipeline_analyze <id>    # 分析指定 segment
+```
 
 ### 下一步
 
-- [ ] **创建分析 skill** — 把 Phase A prompt 模板固化为 `skills/pipeline-analyzer/SKILL.md`，可被 Meta Signal Detector 迭代优化。
-- [ ] **种子数据** — 3-5 个手动标注的分析案例，作为分析 skill 质量的参照基线。
-- [ ] **保守模式上线** — low confidence 建议只记录不执行，积累为 Meta 优化信号。
-- [ ] **旧组件归档** — 新 pipeline 稳定后正式废弃 capture.py/history.db/extractors.py。
-- [ ] **Pipeline 调试面板** (#P-12) — Flask + 纯 HTML 的轻量可视化平台：Segments 列表/详情、Analysis 结果查看、Analysis Trace 查看、Skill 质量趋势。核心功能 ~2 天，完整版（含版本 DAG）~5 天。等分析 skill 跑通几个真实案例后启动。
+- [ ] **生产监控** — 在实际使用中观察分析质量，积累 analysis_traces 数据。
+- [ ] **Meta Signal Detector 首次运行** — 积累 20+ analysis traces 后触发分析 skill 优化。
+- [ ] **Pipeline 调试面板** (#P-12) — Flask + 纯 HTML。核心功能 ~2 天。
+- [ ] **旧组件归档** — 新 pipeline 稳定后废弃 capture.py/history.db/extractors.py。
 
 ---
 
