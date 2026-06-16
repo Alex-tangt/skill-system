@@ -314,6 +314,16 @@ def pipeline_validator_cases(skill_id: str) -> str:
 
 def main():
     """Start the kernel MCP server."""
+    # Auto-start watcher if session is active
+    session_id = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+    if session_id:
+        _, _, watcher = get_new_pipeline()
+        asyncio.create_task(watcher.watch(session_id))
+        import logging
+        logging.getLogger(__name__).info(
+            f"Pipeline watcher auto-started for session {session_id[:8]}..."
+        )
+
     mcp.run(transport="stdio")
 
 

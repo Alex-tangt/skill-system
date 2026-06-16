@@ -6,6 +6,7 @@ LLM, and returns a natural language diagnosis (not JSON).
 
 from __future__ import annotations
 
+import asyncio
 import time
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -55,16 +56,28 @@ class AnalysisRunner:
         # Build prompt
         prompt = await self._prompt_builder.build(segment, prev_msg, next_msg)
 
-        # Call LLM — single pass, no tools needed for diagnosis
-        try:
-            result = await self._llm.complete(
-                messages=[{"role": "user", "content": prompt}],
-                model=self._model,
-            )
-            diagnosis = result.get("message", {}).get("content", "")
-        except Exception as e:
-            logger.error(f"Phase A LLM call failed for {segment.id[:8]}: {e}")
-            diagnosis = f"Analysis failed: {e}"
+        # Call LLM with retry
+        diagnosis = ""
+        last_error = ""
+        for attempt in range(3):
+            try:
+                result = await self._llm.complete(
+                    messages=[{"role": "user", "content": prompt}],
+                    model=self._model,
+                )
+                diagnosis = result.get("message", {}).get("content", "")
+                if diagnosis:
+                    break
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(
+                    f"Phase A LLM attempt {attempt+1}/3 failed: {e}"
+                )
+                if attempt < 2:
+                    await asyncio.sleep(1.0 * (attempt + 1))
+
+        if not diagnosis:
+            diagnosis = f"Analysis failed after 3 attempts: {last_error}"
 
         # Extract error summary mechanically from execution
         error_summary = self._extract_error_summary(segment)

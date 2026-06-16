@@ -90,7 +90,7 @@ class SegmentWatcher:
     # --- Poll logic ----------------------------------------------------------
 
     async def _poll(self, transcript_path: Path) -> None:
-        """Check for new user messages in the transcript."""
+        """Check for new user messages in the transcript (incremental)."""
         if not transcript_path.exists():
             return
 
@@ -98,28 +98,24 @@ class SegmentWatcher:
         current_count = reader.count_user_messages()
 
         if current_count == self._last_user_msg_count:
-            # No new user messages
             return
 
         if current_count < self._last_user_msg_count:
-            # Transcript changed unexpectedly, reset
             logger.warning("User message count decreased — transcript may have rotated")
             self._last_user_msg_count = 0
 
-        # Re-segment the entire transcript
-        # (inefficient but correct; segmenter is deterministic and fast)
+        # Incremental: only segment new user messages
         segmenter = Segmenter(reader)
-        segments = segmenter.segment()
+        new_segments = segmenter.segment_from(self._last_user_msg_count)
 
-        if not segments:
+        if not new_segments:
             return
 
-        # Persist new segments
+        # Persist new segments and link to existing chain
         new_count = 0
-        for i, seg in enumerate(segments):
+        for seg in new_segments:
             existing = await self._store.get(seg.id)
             if existing:
-                # Already persisted — but may need next_id updated
                 if seg.next_id and seg.next_id != existing.get("next_id"):
                     await self._store.update_next(seg.id, seg.next_id)
                 continue
@@ -127,28 +123,34 @@ class SegmentWatcher:
             await self._store.save(seg)
             new_count += 1
 
-            # If this segment has prev_id completed AND has next_id,
-            # it's ready for analysis — push to queue
+            # Link to previous segment if it exists
+            if seg.prev_id is None and self._last_user_msg_count > 0:
+                # Find the last segment from previous batch
+                prev_rows = await self._store.get_by_session(self._session_id)
+                if prev_rows:
+                    prev_sorted = sorted(prev_rows, key=lambda r: r.get("user_msg_index", 0))
+                    last_prev = prev_sorted[-1] if prev_sorted else None
+                    if last_prev and last_prev["id"] != seg.id:
+                        seg.prev_id = last_prev["id"]
+                        await self._store.update_prev(seg.id, last_prev["id"])
+                        await self._store.update_next(last_prev["id"], seg.id)
+                        # Push the now-completed previous segment
+                        await self._queue.put(last_prev["id"])
+                        logger.info(f"Segment {last_prev['id'][:8]} ready (chain linked)")
+
+            # If this segment has a next segment already, push it
             if seg.has_next:
-                # The previous segment (seg.prev_id) is now complete
                 if seg.prev_id:
                     prev_row = await self._store.get(seg.prev_id)
                     if prev_row and not prev_row.get("next_id"):
                         await self._store.update_next(seg.prev_id, seg.id)
-                    # Push prev to analysis queue
                     await self._queue.put(seg.prev_id)
-                    logger.info(
-                        f"Segment {seg.prev_id[:8]} ready for analysis "
-                        f"(next={seg.id[:8]})"
-                    )
+                    logger.info(f"Segment {seg.prev_id[:8]} ready for analysis")
 
         self._last_user_msg_count = current_count
 
         if new_count > 0:
-            logger.info(
-                f"SegmentWatcher: {new_count} new segment(s), "
-                f"total={len(segments)}"
-            )
+            logger.info(f"SegmentWatcher: {new_count} new segment(s)")
 
     async def _finalize_last_segment(self) -> None:
         """Push the last segment (no next_id) for analysis as session ends."""

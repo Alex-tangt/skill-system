@@ -46,7 +46,61 @@ class Segmenter:
         self._reader = reader
         self._budget = budget
 
-    # --- Main segmentation entry point ---------------------------------------
+    # --- Incremental segmentation --------------------------------------------
+
+    def segment_from(self, start_user_msg_index: int = 0) -> list[Segment]:
+        """Segment only new user messages starting from *start_user_msg_index*.
+
+        Returns only segments for user messages at index >= *start_user_msg_index*.
+        These segments still link to previous ones via prev_id (which must be
+        set by the caller if needed).
+        """
+        entries = self._reader.read_all()
+        if not entries:
+            return []
+
+        boundaries = [i for i, e in enumerate(entries) if e.is_user_message]
+        if not boundaries or start_user_msg_index >= len(boundaries):
+            return []
+
+        session_id = entries[0].session_id or "unknown"
+        segments: list[Segment] = []
+
+        for bi in range(start_user_msg_index, len(boundaries)):
+            boundary_idx = boundaries[bi]
+            user_entry = entries[boundary_idx]
+            start_exec = boundary_idx + 1
+            end_exec = boundaries[bi + 1] if bi + 1 < len(boundaries) else len(entries)
+
+            execution_entries = entries[start_exec:end_exec]
+            skills_available = self._collect_skills_available(entries, boundary_idx, end_exec)
+            files_modified = self._collect_files(entries, boundary_idx, end_exec)
+            stats = self._compute_stats(execution_entries, skills_available)
+
+            truncated = self._truncate(execution_entries)
+            import json as _json
+            execution_json = _json.dumps(
+                [self._entry_to_dict(e) for e in truncated], ensure_ascii=False
+            )
+
+            import uuid as _uuid
+            from datetime import datetime as _dt, timezone as _tz
+            segment = Segment(
+                id=str(_uuid.uuid4()),
+                session_id=session_id,
+                user_msg=user_entry.content_text,
+                user_msg_index=bi,
+                execution_json=execution_json,
+                stats_json=stats.to_json(),
+                skills_available=_json.dumps(skills_available),
+                files_modified=_json.dumps(files_modified),
+                created_at=_dt.now(_tz.utc).isoformat(),
+            )
+            segments.append(segment)
+
+        return segments
+
+    # --- Full segmentation ---------------------------------------------------
 
     def segment(self) -> list[Segment]:
         """Segment the transcript and return a linked list of Segments.
