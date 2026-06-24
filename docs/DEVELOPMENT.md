@@ -64,7 +64,7 @@
 - [x] **Validator 种子** — 5 基线测试用例
 - [x] **Bootstrap 脚本** — `scripts/bootstrap_pipeline.py`（--dry-run/--seed-only）
 
-### 项目完成冲刺（2026-06-08）
+### 项目完成冲刺（2026-06-16）
 
 - [x] **Phase 1: 稳定性** — 增量 Segmenter、Watcher 自动启动、LLM 3 次重试、+19 tests（80 total）
 - [x] **Phase 2: Skill 生态** — hello-world scripts/、进化 E2E（模拟错误→诊断→DIFF patch）完整闭环

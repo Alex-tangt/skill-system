@@ -1,12 +1,16 @@
 # plugins.yaml — Skill Engine plugin configuration
 # Loaded by kernel/plugin_manager.py at startup.
+#
+# Note: The data-pipeline plugin below is retained for backward
+# compatibility. Pipeline v0.3 runs natively via src/skill_engine/pipeline/
+# and does not require plugin registration.
 
 plugins:
   data-pipeline:
     name: data-pipeline
     type: internal
     module: skill_engine.plugins.data_pipeline.plugin
-    description: Extract structured traces from raw LLM context captured by hooks.
+    description: (Deprecated) Legacy hook-based trace extraction. Pipeline v0.3 bypasses this.
     config:
       history_db_path: ./traces/history.db
       trace_db_path: ./traces/traces.db

@@ -1,6 +1,29 @@
 from __future__ import annotations
 
-from skill_engine.kernel.validator import validate_input
+
+def validate_input(schema: dict, data: dict) -> list[str]:
+    """Simple JSON Schema input validator (standalone, no external deps)."""
+    errors: list[str] = []
+    props = schema.get("properties", {})
+
+    for field, field_schema in props.items():
+        expected_type = field_schema.get("type")
+        if field not in data:
+            if field in schema.get("required", []):
+                errors.append(f"Missing required field: {field}")
+            continue
+        value = data[field]
+        if expected_type == "string" and not isinstance(value, str):
+            errors.append(f"Field '{field}' must be a string")
+        elif expected_type == "integer" and not isinstance(value, int):
+            errors.append(f"Field '{field}' must be an integer")
+        elif expected_type == "number" and not isinstance(value, (int, float)):
+            errors.append(f"Field '{field}' must be a number")
+        elif expected_type == "boolean" and not isinstance(value, bool):
+            errors.append(f"Field '{field}' must be a boolean")
+        elif expected_type == "array" and not isinstance(value, list):
+            errors.append(f"Field '{field}' must be an array")
+    return errors
 
 
 def test_valid_empty_schema():

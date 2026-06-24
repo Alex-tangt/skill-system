@@ -17,11 +17,12 @@ env/
 .coverage
 htmlcov/
 
-# Traces - runtime SQLite databases
+# Traces - runtime SQLite databases + backups
 traces/*.db
 traces/*.db-journal
 traces/*.db-wal
 traces/*.db-shm
+traces/*.bak
 
 # IDE
 .idea/
